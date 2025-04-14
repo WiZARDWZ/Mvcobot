@@ -2,10 +2,9 @@ import re
 import asyncio
 from datetime import datetime, timedelta
 import pandas as pd
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler
 from database.connector import fetch_all_inventory_data
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
 # وضعیت مکالمه
 AWAITING_PART_CODE = 1
@@ -62,7 +61,8 @@ def process_row(row):
                 "برند": brand if brand else row.get("نام تامین کننده", "نامشخص"),
                 "شماره قطعه": last_base_code,
                 "نام کالا": row.get("نام کالا", "نامشخص"),
-                "فی فروش": row.get("فی فروش", 0)
+                "فی فروش": row.get("فی فروش", 0),
+                "Iran Code": row.get("Iran Code")  # استخراج مقدار ایران کد از SQL
             })
         elif last_base_code:
             new_code = replace_partial_code(last_base_code, part)
@@ -71,7 +71,8 @@ def process_row(row):
                 "برند": brand if brand else row.get("نام تامین کننده", "نامشخص"),
                 "شماره قطعه": new_code,
                 "نام کالا": row.get("نام کالا", "نامشخص"),
-                "فی فروش": row.get("فی فروش", 0)
+                "فی فروش": row.get("فی فروش", 0),
+                "Iran Code": row.get("Iran Code")
             })
     return records
 
@@ -164,18 +165,25 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
                         formatted_price = f"{int(float(price)):,} ریال"
                     except Exception:
                         formatted_price = str(price)
+                    # استخراج و بررسی مقدار ایران کد
+                    iran_code = item.get("Iran Code")
+                    if iran_code and str(iran_code).strip() != "":
+                        iran_line = f"توضیحات: {iran_code}\n"
+                    else:
+                        iran_line = ""
                     response = (
                         f"کد: \u2068{part_number}\u2069\n"
                         f"برند: {brand}\n"
                         f"نام کالا: {product_name}\n"
-                        f"قیمت: {formatted_price}\n\n"
+                        f"قیمت: {formatted_price}\n"
+                        f"{iran_line}\n\n"
                         "🛵 ارسال مستقیم از انبار با زمان تقریبی تحویل 60 دقیقه در هر ساعتی امکان پذیر می‌باشد (هزینه پیک دارد)"
                     )
                     await update.message.reply_text(response)
         except Exception as e:
             await update.message.reply_text(f"⚠️ خطایی رخ داد: {str(e)}")
 
-    # ارسال پیام آخر به همراه دکمه inline "بازگشت به منو اصلی"
+    # اضافه کردن دکمه inline "بازگشت به منو اصلی"
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton("بازگشت به منو اصلی", callback_data="main_menu")]]
     )

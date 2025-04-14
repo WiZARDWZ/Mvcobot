@@ -14,6 +14,15 @@ logger = logging.getLogger(__name__)
 
 class DatabaseConnector:
     def __init__(self):
+        # در صورت استفاده از تنظیمات DB_CONFIG می‌توانید از این بخش استفاده کنید.
+        # self.connection_string = (
+        #     f"DRIVER={DB_CONFIG['driver']};"
+        #     f"SERVER={DB_CONFIG['server']};"
+        #     f"DATABASE={DB_CONFIG['database']};"
+        #     f"UID={DB_CONFIG['user']};"
+        #     f"PWD={DB_CONFIG['password']};"
+        #     "Encrypt=yes;TrustServerCertificate=yes;"
+        # )
         self.connection_string = (
             "DRIVER={ODBC Driver 17 for SQL Server};"
             "SERVER=AMIN\\MVCO;"
@@ -35,9 +44,11 @@ class DatabaseConnector:
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cursor:
-                    sql_query = """
+                    # استفاده از یک متغیر جستجو؛ در اینجا اگر part_code داده شود، مقدار آن در قالب %<code>% قرار می‌گیرد، در غیر این صورت NULL خواهد بود.
+                    search_term = f"%{part_code}%" if part_code else ""
+                    sql_query = f"""
                     DECLARE @RgParamFiscalYearID INT = (SELECT MAX(FiscalYearId) FROM FMK.FiscalYear);
-                    DECLARE @SearchTerm NVARCHAR(100) = ?;
+                    DECLARE @SearchTerm NVARCHAR(100) = N'{search_term}';
 
                     WITH purch AS (
                         SELECT 
@@ -65,6 +76,7 @@ class DatabaseConnector:
                         SELECT 
                             i.UnitTitle,
                             i.Code,
+                            i.iranCode,  -- استخراج ستون iranCode
                             i.SaleGroupTitle,
                             p.PropertyAmount1,
                             i.Title,
@@ -79,7 +91,7 @@ class DatabaseConnector:
                             ON i.ItemID = ii.ItemRef
                         WHERE 
                             i.Type = 1
-                            AND (@SearchTerm IS NULL OR i.Code LIKE '%' + @SearchTerm + '%')
+                            AND (@SearchTerm = '' OR i.Code LIKE '%' + @SearchTerm + '%')
                     ),
                     StockSumery AS (
                         SELECT 
@@ -109,6 +121,7 @@ class DatabaseConnector:
 
                     SELECT 
                         i.Code AS [کد کالا],
+                        i.iranCode AS [Iran Code],
                         i.Title AS [نام کالا],
                         i.UnitTitle AS [واحد سنجش],
                         i.SaleGroupTitle AS [گروه فروش],
@@ -146,17 +159,14 @@ class DatabaseConnector:
                     ORDER BY
                         i.Code, s.Quantity DESC;
                     """
-
                     start_time = datetime.now()
-                    cursor.execute(sql_query, f"%{part_code}%" if part_code else "")
-
+                    cursor.execute(sql_query)
                     columns = [column[0] for column in cursor.description]
                     results = [dict(zip(columns, row)) for row in cursor.fetchall()]
 
-                    # حذف رکوردهای تکراری
+                    # حذف رکوردهای تکراری بر اساس "کد کالا"
                     unique_results = []
                     seen_codes = set()
-
                     for item in results:
                         code = item['کد کالا']
                         if code not in seen_codes:
@@ -165,7 +175,6 @@ class DatabaseConnector:
 
                     duration = (datetime.now() - start_time).total_seconds()
                     logger.info(f"دریافت {len(unique_results)} رکورد در {duration:.2f} ثانیه")
-
                     return unique_results
 
         except pyodbc.Error as e:
