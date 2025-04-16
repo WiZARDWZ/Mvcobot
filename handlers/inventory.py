@@ -103,8 +103,7 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
     if input_text == "🔍 استعلام قطعه":
         await update.message.reply_text("لطفاً کد مورد نظر خود را وارد کنید.")
         return AWAITING_PART_CODE
-
-    valid_pattern = r'^(?:\d{5}[-_/]?\d{5})$'
+    valid_pattern = r'^(?:\d{5}[-_/]?[A-Za-z0-9]{5})$'
     valid_codes = re.findall(valid_pattern, input_text)
     if not valid_codes:
         await update.message.reply_text(
