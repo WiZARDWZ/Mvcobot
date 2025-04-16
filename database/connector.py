@@ -210,3 +210,17 @@ def fetch_all_inventory_data() -> List[Dict]:
 
 def check_db_connection() -> bool:
     return db_connector.check_connection()
+
+
+# در صورت نیاز به تست
+def get_customer_by_phone(phone_number: str) -> dict:
+    """
+    با دریافت شماره تلفن، اطلاعات مشتری (مانند کد مشتری) را از پایگاه داده برمی‌گرداند.
+    در این مثال از یک دیکشنری ساختگی استفاده شده است.
+    """
+    # به عنوان نمونه، اگر شماره تلفن "09123456789" دریافت شود، کد مشتری 123 را برمی‌گرداند.
+    # در عمل این تابع باید به پایگاه داده متصل شده و نتیجه کوئری را بازگرداند.
+    if phone_number == "09123456789":
+        return {"code": "123", "name": "علی"}
+    else:
+        return None

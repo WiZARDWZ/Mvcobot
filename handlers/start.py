@@ -16,10 +16,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     # ارسال عکس خوش‌آمدگویی
-    with open("assets/welcome.jpg", "rb") as photo:  # فرض بر اینکه عکس در مسیر assets هست
+    with open("assets/welcome.jpg", "rb") as photo:
         await update.message.reply_photo(
             photo=InputFile(photo),
             caption="🎉 به *سیستم فروش هوشمند بازرگانی میروکیلی* خوش آمدید 🎉\n\nاز منوی زیر یکی از گزینه‌ها را انتخاب کنید:",
-            parse_mode="Markdown",  # یا "HTML" اگه ترجیح بدی
+            parse_mode="Markdown",
             reply_markup=reply_markup
         )

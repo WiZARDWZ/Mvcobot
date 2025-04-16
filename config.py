@@ -9,3 +9,11 @@ DB_CONFIG = {
     "user": "damavand",
     "password": "damavand",
 }
+API_CONFIG = {
+    "Address": "http://localhost:8585",        # آدرس سرور API
+    "GenerationVersion": "1.0",                  # نسخه API مورد استفاده
+    "JWT": "Your_JWT_Token_Here",                # توکن JWT (بعد از لاگین یا رجیستر)
+    "IntegrationID": "Your_Integration_ID",      # شناسه دستگاه یا IntegrationID
+    "ArbitraryCode": "Unique_GUID",             # کد یکتایی که از طرف سیستم دریافت می‌شود
+    "EncArbitraryCode": "Encrypted_Code"         # نسخه رمزنگاری شده‌ی کد یکتا
+}
