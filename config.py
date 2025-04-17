@@ -1,7 +1,6 @@
-# config.py
-
 BOT_TOKEN = "7705555230:AAFJsjjLv94kRfJlJMcdGD1BXp3k1x1Dd9A"
 
+# دیتابیس سپیدار (استعلام، API)
 DB_CONFIG = {
     "driver": "{ODBC Driver 17 for SQL Server}",
     "server": "WIN-9R9B3VCBI6G\\SEPIDAR",
@@ -9,11 +8,19 @@ DB_CONFIG = {
     "user": "damavand",
     "password": "damavand",
 }
-API_CONFIG = {
-    "Address": "http://localhost:8585",        # آدرس سرور API
-    "GenerationVersion": "1.0",                  # نسخه API مورد استفاده
-    "JWT": "Your_JWT_Token_Here",                # توکن JWT (بعد از لاگین یا رجیستر)
-    "IntegrationID": "Your_Integration_ID",      # شناسه دستگاه یا IntegrationID
-    "ArbitraryCode": "Unique_GUID",             # کد یکتایی که از طرف سیستم دریافت می‌شود
-    "EncArbitraryCode": "Encrypted_Code"         # نسخه رمزنگاری شده‌ی کد یکتا
+
+# دیتابیس مخصوص ربات (تنظیمات، لاگ، بلک‌لیست)
+BOT_DB_CONFIG = {
+    "driver": "{ODBC Driver 17 for SQL Server}",
+    "server": "WIN-9R9B3VCBI6G\\SEPIDAR",
+    "database": "MvcobotDB",  # دیتابیس مخصوص ربات
+    "user": "damavand",
+    "password": "damavand",
 }
+
+# مشخصات API سپیدار
+BASE_URL = 'http://localhost:8585'
+API_VERSION = '1.0.0'
+REGISTRATION_CODE = '10054425'
+USERNAME = 'mvcobot'
+PASSWORD = '001212'

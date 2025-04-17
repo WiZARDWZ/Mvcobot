@@ -224,3 +224,8 @@ def get_customer_by_phone(phone_number: str) -> dict:
         return {"code": "123", "name": "علی"}
     else:
         return None
+
+
+# -------------------------------------
+
+
