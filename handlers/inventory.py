@@ -11,6 +11,7 @@ AWAITING_PART_CODE = 1
 _cached_inventory_data = []
 _last_cache_update = None
 
+# ------------------ توابع کمکی ------------------ #
 def extract_brand_and_part(code):
     if pd.isna(code):
         return None, None
@@ -76,6 +77,7 @@ def find_similar_products(input_code):
     norm_input = normalize_code(input_code)
     return [item for item in get_cached_data() if normalize_code(item.get("شماره قطعه", "")) == norm_input]
 
+# ------------------ به‌روزرسانی کش ------------------ #
 async def update_inventory_cache():
     global _cached_inventory_data, _last_cache_update
     while True:
@@ -91,6 +93,7 @@ async def update_inventory_cache():
             print("❌ خطا در به‌روزرسانی کش:", e)
         await asyncio.sleep(20 * 60)
 
+# ------------------ هندلرهای تلگرام ------------------ #
 async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("🔍 لطفاً کد قطعه را وارد کنید:")
     return AWAITING_PART_CODE
@@ -155,14 +158,27 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
         except Exception as e:
             await update.message.reply_text(f"❌ خطا در پردازش: {str(e)}")
 
-    # دکمه بازگشت
+    # حذف پیام راهنمای قبلی (اگه وجود داشته باشه)
+    try:
+        old_msg_id = context.user_data.get("last_prompt_id")
+        if old_msg_id:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=old_msg_id
+            )
+    except Exception as e:
+        print("❌ خطا در حذف پیام قبلی:", e)
+
+    # ارسال پیام راهنمای جدید
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton("بازگشت به منو اصلی", callback_data="main_menu")]]
     )
-    await update.message.reply_text(
+    sent = await update.message.reply_text(
         "🔍 لطفاً کد قطعه بعدی را وارد کنید یا /cancel را برای خروج وارد کنید:",
         reply_markup=keyboard
     )
+    context.user_data["last_prompt_id"] = sent.message_id
+
     return AWAITING_PART_CODE
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
