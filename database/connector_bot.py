@@ -4,12 +4,11 @@ from typing import Optional
 from config import BOT_DB_CONFIG
 
 def get_connection():
+    # ساخت صحیح connection string با استفاده از کلیدهای dict
     conn_str = (
         f"DRIVER={BOT_DB_CONFIG['driver']};"
         f"SERVER={BOT_DB_CONFIG['server']};"
         f"DATABASE={BOT_DB_CONFIG['database']};"
-        f"UID={BOT_DB_CONFIG['user']};"
-        f"PWD={BOT_DB_CONFIG['password']};"
         f"Trusted_Connection={BOT_DB_CONFIG.get('trusted_connection', 'no')};"
     )
     return pyodbc.connect(conn_str, timeout=30)
@@ -34,8 +33,9 @@ def get_setting(key: str) -> Optional[str]:
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
-            row = cursor.execute(query, key).fetchone()
-            return row[0] if row else None
+            result = cursor.execute(query, key).fetchone()
+            # result یک tuple یا None هست
+            return result[0] if result else None
     except Exception as e:
         print("❌ خطا در get_setting:", e)
         return None
@@ -45,11 +45,11 @@ def set_setting(key: str, value: str):
     query = """
     MERGE bot_settings AS target
     USING (SELECT ? AS [key], ? AS [value]) AS src
-    ON target.[key] = src.[key]
+      ON target.[key] = src.[key]
     WHEN MATCHED THEN
-        UPDATE SET [value] = src.[value]
+      UPDATE SET [value] = src.[value]
     WHEN NOT MATCHED THEN
-        INSERT ([key], [value]) VALUES (src.[key], src.[value]);
+      INSERT ([key], [value]) VALUES (src.[key], src.[value]);
     """
     try:
         with get_connection() as conn:
@@ -92,8 +92,8 @@ def is_blacklisted(user_id: int) -> bool:
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
-            row = cursor.execute(query, user_id).fetchone()
-            return bool(row)
+            result = cursor.execute(query, user_id).fetchone()
+            return result is not None
     except Exception as e:
         print("❌ خطا در is_blacklisted:", e)
         return False
