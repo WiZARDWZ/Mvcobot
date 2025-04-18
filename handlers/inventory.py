@@ -5,10 +5,9 @@ import pandas as pd
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler
 from database.connector import fetch_all_inventory_data
-from database.connector_bot import get_setting  # 🔥 اضافه شد
+from database.connector_bot import get_setting
 
 AWAITING_PART_CODE = 1
-
 _cached_inventory_data = []
 _last_cache_update = None
 
@@ -67,6 +66,7 @@ def process_data(raw_data):
     return [record for row in raw_data for record in process_row(row)]
 
 def normalize_code(code):
+    code = re.sub(r'[\u202d\u202c\u2068\u2069\u200e\u200f\u200b]', '', str(code))
     return re.sub(r'[-_/.,\s]', '', code).upper()
 
 def get_cached_data():
@@ -91,27 +91,11 @@ async def update_inventory_cache():
             print("❌ خطا در به‌روزرسانی کش:", e)
         await asyncio.sleep(20 * 60)
 
-# 🔥 تابع بررسی فعال بودن ربات از طریق تنظیمات دیتابیس
-def is_bot_enabled():
-    try:
-        val = get_setting("enabled")
-        return False if val == "false" else True
-    except:
-        return True  # اگر خطا داشت، پیش‌فرض فعال باشه
-
 async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not is_bot_enabled():
-        await update.message.reply_text("⛔️ ربات در حال حاضر غیرفعال است.")
-        return ConversationHandler.END
-
     await update.message.reply_text("🔍 لطفاً کد قطعه را وارد کنید:")
     return AWAITING_PART_CODE
 
 async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not is_bot_enabled():
-        await update.message.reply_text("⛔️ ربات در حال حاضر غیرفعال است.")
-        return ConversationHandler.END
-
     input_text = update.message.text.strip()
     pattern = r'(\d{5}(?:[-_/.,\s]+)?[A-Za-z0-9]{5})'
     codes = re.findall(pattern, input_text)
@@ -122,36 +106,56 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
         )
         return AWAITING_PART_CODE
 
-    codes = list(set(codes))
-    for part_code in codes:
+    # دریافت متن تحویل بر اساس ساعت
+    try:
+        now = datetime.now().time()
+
+        raw_changeover = get_setting("changeover_hour")
+        changeover_str = raw_changeover if isinstance(raw_changeover, str) else "15:00"
+        changeover = datetime.strptime(changeover_str, "%H:%M").time()
+
+        delivery_before = get_setting("delivery_before")
+        delivery_after = get_setting("delivery_after")
+
+        if now < changeover:
+            delivery_info = delivery_before if isinstance(delivery_before, str) else "🛵 ارسال قبل از ساعت تعیین‌شده"
+        else:
+            delivery_info = delivery_after if isinstance(delivery_after, str) else "🛵 ارسال بعد از ساعت تعیین‌شده"
+
+    except Exception as e:
+        print("❌ خطا در تنظیمات ارسال:", e)
+        delivery_info = "🛵 ارسال سریع از انبار — تحویل ۶۰ دقیقه‌ای (هزینه پیک دارد)"
+
+    for part_code in list(set(codes)):
         try:
             products = find_similar_products(part_code)
             if not products:
                 await update.message.reply_text(f"⚠️ کد '{part_code}' متأسفانه موجود نمی‌باشد.")
             else:
                 for item in products:
-                    part_number = item.get("شماره قطعه", "نامشخص")
+                    part = item.get("شماره قطعه", "نامشخص")
                     brand = item.get("برند", "نامشخص")
-                    product_name = item.get("نام کالا", "نامشخص")
+                    name = item.get("نام کالا", "نامشخص")
                     price = item.get("فی فروش", 0)
                     try:
                         formatted_price = f"{int(float(price)):,} ریال"
                     except:
                         formatted_price = str(price)
-                    iran_code = item.get("Iran Code")
-                    iran_line = f"توضیحات: {iran_code}\n" if iran_code and str(iran_code).strip() else ""
-                    response = (
-                        f"کد: \u2068{part_number}\u2069\n"
+                    iran = item.get("Iran Code")
+                    iran_line = f"توضیحات: {iran}\n" if iran and str(iran).strip() else ""
+                    text = (
+                        f"کد: \u2068{part}\u2069\n"
                         f"برند: {brand}\n"
-                        f"نام کالا: {product_name}\n"
+                        f"نام کالا: {name}\n"
                         f"قیمت: {formatted_price}\n"
-                        f"{iran_line}\n\n"
-                        "🛵 ارسال سریع از انبار — تحویل ۶۰ دقیقه‌ای (هزینه پیک دارد)"
+                        f"{iran_line}\n"
+                        f"{delivery_info}"
                     )
-                    await update.message.reply_text(response)
+                    await update.message.reply_text(text)
         except Exception as e:
             await update.message.reply_text(f"❌ خطا در پردازش: {str(e)}")
 
+    # دکمه بازگشت
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton("بازگشت به منو اصلی", callback_data="main_menu")]]
     )

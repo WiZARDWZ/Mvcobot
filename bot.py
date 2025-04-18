@@ -35,7 +35,6 @@ logging.basicConfig(
 
 ADMIN_GROUP_ID = -1002391888673  # آیدی گروه مدیریت
 
-
 # ✅ فوروارد و لاگ پیام کاربران به گروه مدیریت
 async def forward_and_log(update, context):
     message = update.message
@@ -58,7 +57,6 @@ async def forward_and_log(update, context):
                 )
         except Exception as e:
             print("❌ خطا در فوروارد یا لاگ پیام:", e)
-
 
 # 🔹 پیام‌های ناشناس در گروه‌ها
 async def unknown_message(update, context):

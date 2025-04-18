@@ -1,31 +1,27 @@
 # handlers/admin.py
 
 from telegram import Update
-from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
+from telegram.ext import ContextTypes
 from database.connector_bot import (
     set_setting, get_setting,
     add_to_blacklist, remove_from_blacklist,
-    get_blacklist  # فرض می‌کنیم این تابع را هم به connector_bot.py اضافه کرده‌ایم
+    get_blacklist
 )
 
-# آیدی گروه مدیریت
 ADMIN_GROUP_ID = -1002391888673
 
-# 1. خاموش کردن ربات
 async def disable_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ADMIN_GROUP_ID:
         return
     set_setting("enabled", "false")
     await update.message.reply_text("⏹️ ربات غیرفعال شد.")
 
-# 2. روشن کردن ربات
 async def enable_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ADMIN_GROUP_ID:
         return
     set_setting("enabled", "true")
     await update.message.reply_text("▶️ ربات فعال شد.")
 
-# 3. افزودن به بلک‌لیست
 async def blacklist_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ADMIN_GROUP_ID:
         return
@@ -39,7 +35,6 @@ async def blacklist_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("❗️ شناسه باید عدد باشد.")
 
-# 4. حذف از بلک‌لیست
 async def blacklist_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ADMIN_GROUP_ID:
         return
@@ -53,7 +48,6 @@ async def blacklist_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("❗️ شناسه باید عدد باشد.")
 
-# 5. نمایش لیست سیاه
 async def blacklist_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ADMIN_GROUP_ID:
         return
@@ -64,7 +58,6 @@ async def blacklist_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = "📃 کاربران لیست سیاه:\n" + "\n".join(str(u) for u in users)
         await update.message.reply_text(text)
 
-# 6. تغییر ساعت کاری
 async def set_hours(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ADMIN_GROUP_ID:
         return
@@ -76,7 +69,6 @@ async def set_hours(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         await update.message.reply_text("❗️ فرمت: /set_hours start=08:00 end=18:00")
 
-# 7. تغییر ساعت پنج‌شنبه
 async def set_thursday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ADMIN_GROUP_ID:
         return
@@ -88,21 +80,18 @@ async def set_thursday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         await update.message.reply_text("❗️ فرمت: /set_thursday start=08:00 end=14:00")
 
-# 8. غیرفعال کردن جمعه
 async def disable_friday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ADMIN_GROUP_ID:
         return
     set_setting("disable_friday", "true")
     await update.message.reply_text("🚫 ربات در جمعه‌ها غیرفعال شد.")
 
-# 9. فعال کردن جمعه
 async def enable_friday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ADMIN_GROUP_ID:
         return
     set_setting("disable_friday", "false")
     await update.message.reply_text("✅ ربات در جمعه‌ها فعال شد.")
 
-# 10. تنظیم ناهار
 async def set_lunch_break(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ADMIN_GROUP_ID:
         return
@@ -114,7 +103,6 @@ async def set_lunch_break(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         await update.message.reply_text("❗️ فرمت: /set_lunch_break start=12:00 end=13:00")
 
-# 11. محدودیت استعلام
 async def set_query_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ADMIN_GROUP_ID:
         return
@@ -125,7 +113,6 @@ async def set_query_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         await update.message.reply_text("❗️ فرمت: /set_query_limit limit=50")
 
-# 12. متن قبل از ساعت
 async def set_delivery_before(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ADMIN_GROUP_ID:
         return
@@ -133,7 +120,6 @@ async def set_delivery_before(update: Update, context: ContextTypes.DEFAULT_TYPE
     set_setting("delivery_before", text)
     await update.message.reply_text("📦 متن تحویل قبل از ساعت تنظیم شد.")
 
-# 13. متن بعد از ساعت
 async def set_delivery_after(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ADMIN_GROUP_ID:
         return
@@ -141,7 +127,6 @@ async def set_delivery_after(update: Update, context: ContextTypes.DEFAULT_TYPE)
     set_setting("delivery_after", text)
     await update.message.reply_text("📦 متن تحویل بعد از ساعت تنظیم شد.")
 
-# 14. تغییر ساعت تغییر متن
 async def set_changeover_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ADMIN_GROUP_ID:
         return
@@ -152,7 +137,6 @@ async def set_changeover_hour(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception:
         await update.message.reply_text("❗️ فرمت: /set_changeover_hour time=15:30")
 
-# 15. وضعیت ربات
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ADMIN_GROUP_ID:
         return
