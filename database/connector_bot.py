@@ -97,3 +97,26 @@ def is_blacklisted(user_id: int) -> bool:
     except Exception as e:
         print("❌ خطا در is_blacklisted:", e)
         return False
+def get_blacklist() -> list[int]:
+    try:
+        with pyodbc.connect(BOT_DB_CONFIG) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT user_id FROM blacklist")
+                rows = cursor.fetchall()
+                return [row[0] for row in rows]
+    except Exception as e:
+        print("❌ خطا در get_blacklist:", e)
+        return []
+
+    # -------تنظیمات تحویل
+def get_setting(key: str) -> str | None:
+        try:
+            with pyodbc.connect(BOT_DB_CONFIG) as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT [value] FROM bot_settings WHERE [key] = ?", (key,))
+                    row = cursor.fetchone()
+                    return row[0] if row else None
+        except Exception as e:
+            print("❌ خطا در get_setting:", e)
+            return None
+

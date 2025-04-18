@@ -5,13 +5,13 @@ import pandas as pd
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler
 from database.connector import fetch_all_inventory_data
+from database.connector_bot import get_setting  # 🔥 اضافه شد
 
 AWAITING_PART_CODE = 1
 
 _cached_inventory_data = []
 _last_cache_update = None
 
-# ------------------ توابع کمکی ------------------ #
 def extract_brand_and_part(code):
     if pd.isna(code):
         return None, None
@@ -67,10 +67,6 @@ def process_data(raw_data):
     return [record for row in raw_data for record in process_row(row)]
 
 def normalize_code(code):
-    """
-    پاک‌سازی کد از کاراکترهای Unicode نامرئی، فاصله و نمادها، و تبدیل به حروف بزرگ
-    """
-    code = re.sub(r'[\u202d\u202c\u2068\u2069\u200e\u200f\u200b]', '', str(code))
     return re.sub(r'[-_/.,\s]', '', code).upper()
 
 def get_cached_data():
@@ -78,12 +74,8 @@ def get_cached_data():
 
 def find_similar_products(input_code):
     norm_input = normalize_code(input_code)
-    return [
-        item for item in get_cached_data()
-        if normalize_code(item.get("شماره قطعه", "")) == norm_input
-    ]
+    return [item for item in get_cached_data() if normalize_code(item.get("شماره قطعه", "")) == norm_input]
 
-# ------------------ به‌روزرسانی کش ------------------ #
 async def update_inventory_cache():
     global _cached_inventory_data, _last_cache_update
     while True:
@@ -99,78 +91,74 @@ async def update_inventory_cache():
             print("❌ خطا در به‌روزرسانی کش:", e)
         await asyncio.sleep(20 * 60)
 
-# ------------------ هندلرهای تلگرام ------------------ #
+# 🔥 تابع بررسی فعال بودن ربات از طریق تنظیمات دیتابیس
+def is_bot_enabled():
+    try:
+        val = get_setting("enabled")
+        return False if val == "false" else True
+    except:
+        return True  # اگر خطا داشت، پیش‌فرض فعال باشه
+
 async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not is_bot_enabled():
+        await update.message.reply_text("⛔️ ربات در حال حاضر غیرفعال است.")
+        return ConversationHandler.END
+
     await update.message.reply_text("🔍 لطفاً کد قطعه را وارد کنید:")
     return AWAITING_PART_CODE
 
 async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not is_bot_enabled():
+        await update.message.reply_text("⛔️ ربات در حال حاضر غیرفعال است.")
+        return ConversationHandler.END
+
     input_text = update.message.text.strip()
-
-    # حالت ارسال اشتباه دکمه
-    if input_text == "🔍 استعلام قطعه":
-        await update.message.reply_text("لطفاً کد مورد نظر خود را وارد کنید.")
-        return AWAITING_PART_CODE
-
-    # نرمال‌سازی ورودی و بررسی اعتبار
-    cleaned_text = normalize_code(input_text)
-    if not re.fullmatch(r'\d{10}', cleaned_text):
+    pattern = r'(\d{5}(?:[-_/.,\s]+)?[A-Za-z0-9]{5})'
+    codes = re.findall(pattern, input_text)
+    if not codes:
         await update.message.reply_text(
-            "⛔️ کد قطعه وارد شده معتبر نیست.\n"
-            "لطفاً کد را به یکی از فرمت‌های زیر وارد نمایید:\n"
+            "⛔️ کد وارد شده معتبر نیست. لطفاً کدی با یکی از فرمت‌های زیر وارد کنید:\n"
             "- 12345-12345\n- 12345_12345\n- 1234512345\n- 12345/12345"
         )
         return AWAITING_PART_CODE
 
-    try:
-        results = find_similar_products(input_text)
-        if not results:
-            await update.message.reply_text(f"⚠️ کد '{input_text}' متأسفانه موجود نمی‌باشد.")
-        else:
-            for item in results:
-                part = item.get("شماره قطعه", "نامشخص")
-                brand = item.get("برند", "نامشخص")
-                name = item.get("نام کالا", "نامشخص")
-                price = item.get("فی فروش", 0)
-                try:
-                    formatted_price = f"{int(float(price)):,} ریال"
-                except:
-                    formatted_price = str(price)
-                iran = item.get("Iran Code")
-                iran_line = f"توضیحات: {iran}\n" if iran and str(iran).strip() else ""
-                text = (
-                    f"کد: \u2068{part}\u2069\n"
-                    f"برند: {brand}\n"
-                    f"نام کالا: {name}\n"
-                    f"قیمت: {formatted_price}\n"
-                    f"{iran_line}\n"
-                    "🛵 تحویل فوری با هزینه پیک در تمام ساعات روز ممکن است."
-                )
-                await update.message.reply_text(text)
-    except Exception as e:
-        await update.message.reply_text(f"❌ خطا در پردازش: {str(e)}")
+    codes = list(set(codes))
+    for part_code in codes:
+        try:
+            products = find_similar_products(part_code)
+            if not products:
+                await update.message.reply_text(f"⚠️ کد '{part_code}' متأسفانه موجود نمی‌باشد.")
+            else:
+                for item in products:
+                    part_number = item.get("شماره قطعه", "نامشخص")
+                    brand = item.get("برند", "نامشخص")
+                    product_name = item.get("نام کالا", "نامشخص")
+                    price = item.get("فی فروش", 0)
+                    try:
+                        formatted_price = f"{int(float(price)):,} ریال"
+                    except:
+                        formatted_price = str(price)
+                    iran_code = item.get("Iran Code")
+                    iran_line = f"توضیحات: {iran_code}\n" if iran_code and str(iran_code).strip() else ""
+                    response = (
+                        f"کد: \u2068{part_number}\u2069\n"
+                        f"برند: {brand}\n"
+                        f"نام کالا: {product_name}\n"
+                        f"قیمت: {formatted_price}\n"
+                        f"{iran_line}\n\n"
+                        "🛵 ارسال سریع از انبار — تحویل ۶۰ دقیقه‌ای (هزینه پیک دارد)"
+                    )
+                    await update.message.reply_text(response)
+        except Exception as e:
+            await update.message.reply_text(f"❌ خطا در پردازش: {str(e)}")
 
-    # حذف پیام راهنمای قبلی (اگه وجود داشته باشه)
-    try:
-        old_msg_id = context.user_data.get("last_prompt_id")
-        if old_msg_id:
-            await context.bot.delete_message(
-                chat_id=update.effective_chat.id,
-                message_id=old_msg_id
-            )
-    except Exception as e:
-        print("❌ خطا در حذف پیام قبلی:", e)
-
-    # ارسال پیام راهنمای جدید
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton("بازگشت به منو اصلی", callback_data="main_menu")]]
     )
-    sent = await update.message.reply_text(
+    await update.message.reply_text(
         "🔍 لطفاً کد قطعه بعدی را وارد کنید یا /cancel را برای خروج وارد کنید:",
         reply_markup=keyboard
     )
-    context.user_data["last_prompt_id"] = sent.message_id
-
     return AWAITING_PART_CODE
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
