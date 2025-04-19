@@ -12,10 +12,10 @@ DB_CONFIG = {
 
 # ===== اینجا دقیقاً باید به شکل زیر باشه (نکته: کاما بعد از هر خط!) =====
 BOT_DB_CONFIG = {
-    "driver": "{ODBC Driver 17 for SQL Server}",  # کاما مهم است
-    "server": "AMIN\\MVCO",                        # کاما مهم است
-    "database": "MvcobotDB",                       # کاما مهم است
-    "trusted_connection": "yes"                    # آخر خط بدون کاما
+    "driver": "{ODBC Driver 17 for SQL Server}",
+    "server": "AMIN\\MVCO",
+    "database": "MvcobotDB",
+    "trusted_connection": "yes"
 }
 
 BASE_URL = 'http://localhost:8585'
