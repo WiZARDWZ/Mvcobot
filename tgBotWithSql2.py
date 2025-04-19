@@ -1,3 +1,4 @@
+# tgBotWithSql2.py
 import asyncio
 import pandas as pd
 import pyodbc
@@ -41,7 +42,7 @@ load_settings()
 # ================= تنظیمات SQL Server =================
 SQL_SERVER_CONFIG = {
     "driver": "{ODBC Driver 17 for SQL Server}",
-    "server": "WIN-9R9B3VCBI6G\SEPIDAR", 
+    "server": "WIN-9R9B3VCBI6G\\SEPIDAR",
     "database": "Sepidar01",
     "user": "damavand",
     "password": "damavand",
@@ -80,7 +81,7 @@ def get_sql_data():
 DECLARE @RgParamFiscalYearID INT = (SELECT MAX(FiscalYearId) FROM FMK.FiscalYear);
 
 WITH purch AS (
-    SELECT 
+    SELECT
         r.Number,
         r.Date,
         r.DelivererCode,
@@ -92,61 +93,61 @@ WITH purch AS (
         ri.Price,
         r.StockTitle,
         ri.TracingTitle
-    FROM 
-        inv.vwInventoryReceipt r 
-    LEFT JOIN 
-        INV.vwInventoryReceiptItem ri 
+    FROM
+        inv.vwInventoryReceipt r
+    LEFT JOIN
+        INV.vwInventoryReceiptItem ri
         ON r.InventoryReceiptID = ri.InventoryReceiptRef
-    WHERE 
-        r.FiscalYearRef = @RgParamFiscalYearID 
+    WHERE
+        r.FiscalYearRef = @RgParamFiscalYearID
         AND r.Type = 1
 ),
 Item AS (
-    SELECT 
+    SELECT
         i.UnitTitle,
         i.Code,
         i.SaleGroupTitle,
         p.PropertyAmount1,
         i.Title,
         ii.StockTitle
-    FROM 
+    FROM
         inv.vwItem i
-    LEFT JOIN 
-        inv.vwItemPropertyAmount p 
+    LEFT JOIN
+        inv.vwItemPropertyAmount p
         ON i.ItemID = p.ItemRef
-    LEFT JOIN 
-        inv.vwItemStock ii 
+    LEFT JOIN
+        inv.vwItemStock ii
         ON i.ItemID = ii.ItemRef
-    WHERE 
+    WHERE
         i.Type = 1
 ),
 StockSumery AS (
-    SELECT 
-        ItemCode, 
-        StockTitle, 
-        SUM(Quantity) AS Quantity, 
+    SELECT
+        ItemCode,
+        StockTitle,
+        SUM(Quantity) AS Quantity,
         TracingTitle
-    FROM 
+    FROM
         inv.vwItemStockSummary
-    WHERE 
+    WHERE
         FiscalYearRef = @RgParamFiscalYearID
-    GROUP BY 
-        ItemCode, 
-        StockTitle, 
+    GROUP BY
+        ItemCode,
+        StockTitle,
         TracingTitle
 ),
 FeeSale AS (
-    SELECT 
-        ItemCode, 
-        TracingTitle, 
+    SELECT
+        ItemCode,
+        TracingTitle,
         Fee
-    FROM 
+    FROM
         sls.vwPriceNoteItem
-    WHERE 
+    WHERE
         Fee > 0
 )
 
-SELECT 
+SELECT
     i.Code AS [کد کالا],
     i.Title AS [نام کالا],
     i.UnitTitle AS [واحد سنجش],
@@ -162,24 +163,25 @@ SELECT
     i.StockTitle AS [انبار],
     COALESCE(p.TracingTitle, s.TracingTitle, 'نا مشخص') AS [عامل ردیابی],
     s.Quantity AS [موجودی],
-    fs.Fee AS [فی فروش]
-FROM 
+    fs.Fee AS [فی فروش],
+    p.TracingTitle AS [Iran Code]
+FROM
     Item i
-LEFT JOIN 
-    purch p 
-    ON i.Code = p.ItemCode 
+LEFT JOIN
+    purch p
+    ON i.Code = p.ItemCode
     AND i.StockTitle = p.StockTitle
-LEFT JOIN 
-    StockSumery s 
-    ON i.Code = s.ItemCode 
-    AND i.StockTitle = s.StockTitle 
+LEFT JOIN
+    StockSumery s
+    ON i.Code = s.ItemCode
+    AND i.StockTitle = s.StockTitle
     AND COALESCE(p.TracingTitle, '') = COALESCE(s.TracingTitle, '')
-LEFT JOIN 
-    FeeSale fs 
-    ON i.Code = fs.ItemCode 
+LEFT JOIN
+    FeeSale fs
+    ON i.Code = fs.ItemCode
     AND COALESCE(s.TracingTitle, '') = COALESCE(fs.TracingTitle, '')
-WHERE 
-    s.Quantity IS NOT NULL 
+WHERE
+    s.Quantity IS NOT NULL
     AND s.Quantity > 0
     AND fs.Fee IS NOT NULL;
         """
@@ -232,7 +234,8 @@ def process_row(row):
                 "برند": brand if brand else row.get("برند", "نامشخص"),
                 "شماره قطعه": last_base_code,
                 "نام کالا": row.get("نام کالا", ""),
-                "فی فروش": row.get("فی فروش", 0)
+                "فی فروش": row.get("فی فروش", 0),
+                "توضیحات": row.get("Iran Code", "")
             })
         elif last_base_code:
             new_code = replace_partial_code(last_base_code, part)
@@ -241,7 +244,8 @@ def process_row(row):
                 "برند": brand if brand else row.get("برند", "نامشخص"),
                 "شماره قطعه": new_code,
                 "نام کالا": row.get("نام کالا", ""),
-                "فی فروش": row.get("فی فروش", 0)
+                "فی فروش": row.get("فی فروش", 0),
+                "توضیحات": row.get("Iran Code", "")
             })
     return records
 
@@ -326,7 +330,8 @@ def find_similar_products(partial_code, only_original=False):
                     'product_code': product_code,
                     'brand': brand,
                     'price': price,
-                    'name': row.get("نام کالا", "")
+                    'name': row.get("نام کالا", ""),
+                    'explanation': row.get("توضیحات", "")
                 }
     return list(brand_products.values())
 
@@ -408,13 +413,16 @@ async def handle_new_message(event):
                 else:
                     footer_text = settings.get("delivery_info", {}).get("after_15", "")
                 formatted_price = format_price(product['price'])
+                explanation = product.get('explanation', "")
+                explanation_line = f"توضیحات: {explanation}\n" if explanation.strip() else ""
                 if group_id == MAIN_GROUP_ID and product['brand'] in original_brands:
                     response = (
                         "سلام وقت بخیر\n\n"
                         f"کد: `{fixed_product_code}`\n"
                         f"برند: **{product['brand']}**\n"
                         f"نام کالا: {product['name']}\n"
-                        f"قیمت: {formatted_price} ریال\n\n"
+                        f"قیمت: {formatted_price} ریال\n"
+                        f"{explanation_line}\n"
                         f"{footer_text}\n"
                     )
                 else:
@@ -423,7 +431,8 @@ async def handle_new_message(event):
                         f"کد: `{fixed_product_code}`\n"
                         f"برند: **{product['brand']}**\n"
                         f"نام کالا: {product['name']}\n"
-                        f"قیمت: {formatted_price} ریال\n\n"
+                        f"قیمت: {formatted_price} ریال\n"
+                        f"{explanation_line}\n"
                         f"{footer_text}\n"
                     )
                 await client.send_message(sender_id, response, parse_mode='markdown')
