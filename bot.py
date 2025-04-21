@@ -18,7 +18,7 @@ from handlers.inventory import (
     AWAITING_PART_CODE,
     update_inventory_cache
 )
-from handlers.main_buttons import handle_main_buttons, show_main_menu_from_callback
+from handlers.main_buttons import handle_main_buttons, get_main_menu
 from handlers.admin import (
     disable_bot, enable_bot, blacklist_add, blacklist_remove,
     blacklist_list, set_hours, set_thursday, disable_friday,
@@ -35,17 +35,16 @@ logging.basicConfig(
 
 ADMIN_GROUP_ID = -1002391888673  # آیدی گروه مدیریت
 
-# ✅ فوروارد و لاگ پیام کاربران
-async def forward_and_log(update, context):
+# لاگ و فوروارد پیام‌های private
+async def forward_and_log(update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
-    if not message or message.from_user is None or message.from_user.is_bot:
+    if not message or message.from_user.is_bot:
         return
-    try:
-        user = message.from_user
-        chat = update.effective_chat
-        text = message.text or ""
-
-        if chat.type == "private":
+    user = message.from_user
+    chat = update.effective_chat
+    text = message.text or ""
+    if chat.type == "private":
+        try:
             log_message(user.id, chat.id, "in", text)
             if not is_blacklisted(user.id):
                 await context.bot.forward_message(
@@ -53,54 +52,70 @@ async def forward_and_log(update, context):
                     from_chat_id=chat.id,
                     message_id=message.message_id
                 )
-    except Exception as e:
-        print("❌ خطا در فوروارد یا لاگ پیام:", e)
+        except Exception as e:
+            print("❌ خطا در فوروارد یا لاگ پیام:", e)
 
-# 🔹 پیام‌های ناشناس در گروه‌ها
-async def unknown_message(update, context):
-    if update.effective_chat and update.effective_chat.type != "private":
+# پیام‌های ناشناس در گروه‌های غیر از private
+async def unknown_message(update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type != "private":
         await update.message.reply_text("🔸 لطفاً یکی از گزینه‌های منو را انتخاب کنید.")
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, forward_and_log), group=-1)
+    # اولویت ۱: لاگ و فوروارد
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, forward_and_log),
+        group=-1
+    )
 
+    # /start
     app.add_handler(CommandHandler("start", start))
 
+    # مکالمه استعلام با دو هندلر در حالت AWAITING_PART_CODE
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🔍 استعلام قطعه$"), handle_inventory_callback)],
-        states={AWAITING_PART_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_inventory_input)]},
+        states={
+            AWAITING_PART_CODE: [
+                # اگر کلید منوی اصلی زده شد → خارج شو
+                MessageHandler(filters.Regex("^(📦 نحوه تحویل|📝 نحوه ثبت سفارش|📞 تماس با ما)$"), handle_main_buttons),
+                # در غیر این صورت → پردازش کد
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_inventory_input)
+            ]
+        },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True
     )
     app.add_handler(conv_handler)
 
-    app.add_handler(CallbackQueryHandler(show_main_menu_from_callback, pattern="^main_menu$"))
+    # بازگشت به منو اصلی (در صورتی که با inline بخواهیم)
+    app.add_handler(CallbackQueryHandler(lambda u,c: u.callback_query.answer() or u.callback_query.message.reply_text(
+        "🏠 به منوی اصلی برگشتید. لطفاً یک گزینه را انتخاب کنید:",
+        reply_markup=get_main_menu()
+    ), pattern="^main_menu$"))
+
+    # دکمه‌های غیر استعلام خارج از مکالمه
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_buttons))
 
-    # دستورات مدیریتی
-    admin_cmds = [
-        ("disable", disable_bot),
-        ("enable", enable_bot),
-        ("blacklist_add", blacklist_add),
-        ("blacklist_remove", blacklist_remove),
-        ("blacklist_list", blacklist_list),
-        ("set_hours", set_hours),
-        ("set_thursday", set_thursday),
-        ("disable_friday", disable_friday),
-        ("enable_friday", enable_friday),
-        ("set_lunch_break", set_lunch_break),
-        ("set_query_limit", set_query_limit),
-        ("set_delivery_info_before", set_delivery_before),
-        ("set_delivery_info_after", set_delivery_after),
-        ("set_changeover_hour", set_changeover_hour),
-        ("status", status),
-        ("log", log_user)
-    ]
-    for cmd, handler in admin_cmds:
-        app.add_handler(CommandHandler(cmd, handler))
+    # دستورات مدیریتی (فقط در گروه مدیریت)
+    app.add_handler(CommandHandler("disable", disable_bot))
+    app.add_handler(CommandHandler("enable", enable_bot))
+    app.add_handler(CommandHandler("blacklist_add", blacklist_add))
+    app.add_handler(CommandHandler("blacklist_remove", blacklist_remove))
+    app.add_handler(CommandHandler("blacklist_list", blacklist_list))
+    app.add_handler(CommandHandler("set_hours", set_hours))
+    app.add_handler(CommandHandler("set_thursday", set_thursday))
+    app.add_handler(CommandHandler("disable_friday", disable_friday))
+    app.add_handler(CommandHandler("enable_friday", enable_friday))
+    app.add_handler(CommandHandler("set_lunch_break", set_lunch_break))
+    app.add_handler(CommandHandler("set_query_limit", set_query_limit))
+    app.add_handler(CommandHandler("set_delivery_info_before", set_delivery_before))
+    app.add_handler(CommandHandler("set_delivery_info_after", set_delivery_after))
+    app.add_handler(CommandHandler("set_changeover_hour", set_changeover_hour))
+    app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("log", log_user))
 
+    # بروزرسانی کش هر ۲۰ دقیقه
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.create_task(update_inventory_cache())

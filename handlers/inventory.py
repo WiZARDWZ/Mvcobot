@@ -2,217 +2,205 @@ import re
 import asyncio
 from datetime import datetime, time
 import pandas as pd
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from database.connector import fetch_all_inventory_data
 from database.connector_bot import get_setting, is_blacklisted
 
 AWAITING_PART_CODE = 1
-_cached_inventory_data = []
-_last_cache_update = None
+_cached_inventory_data: list[dict] = []
+_last_cache_update: datetime | None = None
 
-# ------------------ توابع کمکی ------------------ #
-def extract_brand_and_part(code):
-    if pd.isna(code):
-        return None, None
-    parts = str(code).split("_")
-    part_number = parts[0]
-    brand = parts[1] if len(parts) > 1 else None
-    return part_number, brand
-
-def replace_partial_code(base_code, variant):
+# ---------------- ابزار بررسی ساعات ----------------
+def is_within_working_hours() -> tuple[bool, str, str]:
     try:
-        base_prefix, base_suffix = base_code.rsplit('-', 1)
-    except Exception:
-        return base_code
-    if variant.isdigit() and len(variant) < 5:
-        new_suffix = base_suffix[:-len(variant)] + variant
-        return f"{base_prefix}-{new_suffix}"
-    elif len(variant) == 5:
-        return f"{base_prefix}-{variant}"
-    return base_code
-
-def process_row(row):
-    records = []
-    code = row.get("کد کالا", "")
-    part_number, brand = extract_brand_and_part(code)
-    if not part_number:
-        part_number = code
-    parts = str(part_number).split('/')
-    last_base_code = None
-    for part in parts:
-        part = part.strip()
-        if '-' in part and len(part.split('-')[-1]) >= 5:
-            last_base_code = part
-            records.append({
-                "برند": brand or row.get("نام تامین کننده", "نامشخص"),
-                "شماره قطعه": last_base_code,
-                "نام کالا": row.get("نام کالا", "نامشخص"),
-                "فی فروش": row.get("فی فروش", 0),
-                "Iran Code": row.get("Iran Code")
-            })
-        elif last_base_code:
-            new_code = replace_partial_code(last_base_code, part)
-            last_base_code = new_code
-            records.append({
-                "برند": brand or row.get("نام تامین کننده", "نامشخص"),
-                "شماره قطعه": new_code,
-                "نام کالا": row.get("نام کالا", "نامشخص"),
-                "فی فروش": row.get("فی فروش", 0),
-                "Iran Code": row.get("Iran Code")
-            })
-    return records
-
-def process_data(raw_data):
-    return [record for row in raw_data for record in process_row(row)]
-
-def normalize_code(code):
-    code = re.sub(r'[\u202d\u202c\u2068\u2069\u200e\u200f\u200b]', '', str(code))
-    return re.sub(r'[-_/.,\s]', '', code).upper()
-
-def get_cached_data():
-    return _cached_inventory_data
-
-def find_similar_products(input_code):
-    norm_input = normalize_code(input_code)
-    return [item for item in get_cached_data() if normalize_code(item.get("شماره قطعه", "")) == norm_input]
-
-# ------------------ به‌روزرسانی کش ------------------ #
-async def update_inventory_cache():
-    global _cached_inventory_data, _last_cache_update
-    while True:
-        try:
-            raw_data = fetch_all_inventory_data()
-            if raw_data:
-                _cached_inventory_data = process_data(raw_data)
-                _last_cache_update = datetime.now()
-                print(f"[{_last_cache_update}] کش موجودی به‌روز شد. رکوردها: {len(_cached_inventory_data)}")
-            else:
-                print("⚠️ خطا در دریافت موجودی از دیتابیس.")
-        except Exception as e:
-            print("❌ خطا در به‌روزرسانی کش:", e)
-        await asyncio.sleep(20 * 60)
-
-# ------------------ ابزار بررسی ساعات ------------------ #
-def is_within_working_hours():
-    try:
-        raw_start = get_setting("working_start") or "08:00"
-        raw_end = get_setting("working_end") or "18:00"
-        start = datetime.strptime(raw_start, "%H:%M").time()
-        end = datetime.strptime(raw_end, "%H:%M").time()
+        start_str = get_setting("working_start") or "08:00"
+        end_str = get_setting("working_end") or "18:00"
+        start = datetime.strptime(start_str, "%H:%M").time()
+        end = datetime.strptime(end_str, "%H:%M").time()
         now = datetime.now().time()
-        return start <= now < end, raw_start, raw_end
+        return start <= now < end, start_str, end_str
     except:
         return True, "08:00", "18:00"
 
-# ------------------ هندلرهای تلگرام ------------------ #
+# ---------------- دریافت متن تحویل ----------------
+def get_delivery_info() -> str:
+    now = datetime.now().time()
+    changeover_str = get_setting("changeover_hour") or "15:00"
+    try:
+        changeover = datetime.strptime(changeover_str, "%H:%M").time()
+    except:
+        changeover = time(15, 0)
+    before = get_setting("delivery_before") or "🚚 تحویل کالا هر روز ساعت 16 و پنجشنبه‌ها ساعت 12:30"
+    after = get_setting("delivery_after") or "🛵 ارسال مستقیم از انبار — تحویل ۶۰ دقیقه‌ای (هزینه پیک دارد)"
+    return before if now < changeover else after
+
+# ---------------- ساده‌سازی داده‌ها ----------------
+def extract_brand_and_part(code: str | None) -> tuple[str|None, str|None]:
+    if not code or pd.isna(code):
+        return None, None
+    parts = str(code).split("_")
+    return parts[0], (parts[1] if len(parts) > 1 else None)
+
+def replace_partial_code(base_code: str, variant: str) -> str:
+    try:
+        prefix, suffix = base_code.rsplit('-', 1)
+    except:
+        return base_code
+    if variant.isdigit() and len(variant) < 5:
+        return f"{prefix}-{suffix[:-len(variant)]}{variant}"
+    if len(variant) == 5:
+        return f"{prefix}-{variant}"
+    return base_code
+
+def process_row(row: dict) -> list[dict]:
+    records = []
+    raw_code = row.get("کد کالا", "")
+    part, brand = extract_brand_and_part(raw_code)
+    if not part:
+        part = raw_code
+    current = part
+    for segment in str(part).split("/"):
+        seg = segment.strip()
+        if "-" in seg:
+            current = seg
+        else:
+            current = replace_partial_code(current, seg)
+        records.append({
+            "شماره قطعه": current,
+            "برند": brand or row.get("نام تامین کننده", "نامشخص"),
+            "نام کالا": row.get("نام کالا", "نامشخص"),
+            "فی فروش": row.get("فی فروش", 0),
+            "Iran Code": row.get("Iran Code")
+        })
+    return records
+
+def process_data(raw: list[dict]) -> list[dict]:
+    return [r for row in raw for r in process_row(row)]
+
+# ---------------- به‌روزرسانی کش ----------------
+async def update_inventory_cache():
+    global _cached_inventory_data, _last_cache_update
+    while True:
+        raw = fetch_all_inventory_data()
+        _cached_inventory_data = process_data(raw) if raw else []
+        _last_cache_update = datetime.now()
+        await asyncio.sleep(20 * 60)
+
+# ---------------- اعتبارسنجی فرمت ----------------
+def is_valid_code(text: str) -> bool:
+    return bool(re.fullmatch(r'\d{5}[-_/]?\d{5}', text.strip()))
+
+# ---------------- کیبورد راهنما ----------------
+def get_next_prompt_kb():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("بازگشت به منو اصلی", callback_data="main_menu")
+    ]])
+
+# ---------------- هندلر شروع استعلام ----------------
 async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
+
     # بررسی بلک‌لیست
     if is_blacklisted(user_id):
         await update.message.reply_text(
-            "⛔️ شما در لیست سیاه هستید. لطفاً برای رفع مشکل با پشتیبانی تماس بگیرید."
+            "⛔️ شما در لیست سیاه هستید.\n"
+            "برای رفع مشکل با پشتیبانی تماس بگیرید."
         )
         return ConversationHandler.END
+
     # بررسی ساعات کاری
     ok, start, end = is_within_working_hours()
     if not ok:
         await update.message.reply_text(
-            f"⏰ ساعات کاری ربات از {start} تا {end} می‌باشد. لطفاً در این بازه برای استعلام تلاش کنید."
+            f"⏰ ساعات کاری ربات از {start} تا {end} می‌باشد.\n"
+            "لطفاً در این بازه برای استعلام تلاش کنید."
         )
         return ConversationHandler.END
-    # ارسال پیام
+
+    # شروع
     await update.message.reply_text("🔍 لطفاً کد قطعه را وارد کنید:")
     return AWAITING_PART_CODE
 
+# ---------------- هندلر دریافت کد ----------------
 async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = update.effective_user.id
-    # بررسی بلک‌لیست
-    if is_blacklisted(user_id):
+    text = update.message.text.strip()
+
+    # اگر کاربر دکمه توضیحات را زد
+    if text == "نحوه ثبت سفارش":
         await update.message.reply_text(
-            "⛔️ شما در لیست سیاه هستید. لطفاً برای رفع مشکل با پشتیبانی تماس بگیرید."
+            "📝 نحوه ثبت سفارش:\n"
+            "برای ثبت سفارش، پس از استعلام کد قطعه، با بخش فروش تماس بگیرید."
         )
         return ConversationHandler.END
-    # کد ورودی
-    input_text = update.message.text.strip()
-    pattern = r'(\d{5}(?:[-_/.,\s]+)?[A-Za-z0-9]{5})'
-    codes = re.findall(pattern, input_text)
-    if not codes:
+    if text == "نحوه تحویل":
         await update.message.reply_text(
-            "⛔️ کد وارد شده معتبر نیست. لطفاً کدی با یکی از فرمت‌های زیر وارد کنید:\n"
-            "- 12345-12345\n- 12345_12345\n- 1234512345\n- 12345/12345"
+            "🚚 نحوه تحویل:\n"
+            "تحویل کالا هر روز ساعت 16 و پنجشنبه‌ها ساعت 12:30 در دفتر بازار."
+        )
+        return ConversationHandler.END
+    if text == "تماس با ما":
+        await update.message.reply_text(
+            "📞 تماس با ما:\n"
+            "۰۹۱۲۱۲۳۴۵۶۷"
+        )
+        return ConversationHandler.END
+
+    # اعتبارسنجی فرمت
+    if not is_valid_code(text):
+        await update.message.reply_text(
+            "⛔️ کد وارد شده معتبر نیست.\n"
+            "لطفاً یکی از فرمت‌های زیر را وارد کنید:\n"
+            "- 12345-12345\n"
+            "- 12345_12345\n"
+            "- 1234512345\n"
+            "- 12345/12345"
         )
         return AWAITING_PART_CODE
 
-    # دریافت متن تحویل بر اساس ساعت
-    try:
-        now = datetime.now().time()
-        raw_changeover = get_setting("changeover_hour")
-        changeover_str = raw_changeover if isinstance(raw_changeover, str) else "15:00"
-        changeover = datetime.strptime(changeover_str, "%H:%M").time()
-        delivery_before = get_setting("delivery_before")
-        delivery_after = get_setting("delivery_after")
-        if now < changeover:
-            delivery_info = delivery_before if isinstance(delivery_before, str) else "🛵 ارسال قبل از ساعت تعیین‌شده"
-        else:
-            delivery_info = delivery_after if isinstance(delivery_after, str) else "🛵 ارسال بعد از ساعت تعیین‌شده"
-    except Exception as e:
-        print("❌ خطا در تنظیمات ارسال:", e)
-        delivery_info = "🛵 ارسال سریع از انبار — تحویل ۶۰ دقیقه‌ای (هزینه پیک دارد)"
+    # آماده‌سازی پاسخ
+    delivery = get_delivery_info()
+    norm = re.sub(r'[-_/.,\s]', '', text).upper()
+    matched = [
+        item for item in _cached_inventory_data
+        if re.sub(r'[-_/.,\s]', '', item["شماره قطعه"]).upper() == norm
+    ]
 
-    for part_code in list(set(codes)):
-        try:
-            products = find_similar_products(part_code)
-            if not products:
-                await update.message.reply_text(f"⚠️ کد '{part_code}' متأسفانه موجود نمی‌باشد.")
-            else:
-                for item in products:
-                    part = item.get("شماره قطعه", "نامشخص")
-                    brand = item.get("برند", "نامشخص")
-                    name = item.get("نام کالا", "نامشخص")
-                    price = item.get("فی فروش", 0)
-
-                    try:
-                        formatted_price = f"{int(float(price)):,} ریال"
-                    except:
-                        formatted_price = str(price)
-
-                    iran = item.get("Iran Code")
-                    iran_line = f"توضیحات: {iran}\n" if iran and str(iran).strip() else ""
-                    text = (
-                        f"کد: `\u2068{part}\u2069`\n"
-                        f"برند: **{brand}**\n"
-                        f"نام کالا: {name}\n"
-                        f"قیمت: **{formatted_price}**\n"
-                        f"{iran_line}\n"
-                        f"{delivery_info}"
-                    )
-
-                    await update.message.reply_text(text, parse_mode="Markdown")
-        except Exception as e:
-            await update.message.reply_text(f"❌ خطا در پردازش: {str(e)}")
+    if not matched:
+        await update.message.reply_text(f"⚠️ کد `{text}` موجود نمی‌باشد.", parse_mode="Markdown")
+    else:
+        for item in matched:
+            iran = item.get("Iran Code")
+            iran_line = f"توضیحات: {iran}\n" if iran else ""
+            price = item.get("فی فروش", 0)
+            try:
+                price_str = f"{int(float(price)):,} ریال"
+            except:
+                price_str = str(price)
+            msg = (
+                f"کد: `{item['شماره قطعه']}`\n"
+                f"برند: **{item['برند']}**\n"
+                f"نام کالا: {item['نام کالا']}\n"
+                f"قیمت: **{price_str}**\n"
+                f"{iran_line}"
+                f"{delivery}"
+            )
+            await update.message.reply_text(msg, parse_mode="Markdown")
 
     # حذف پیام راهنمای قبلی
-    try:
-        old_msg_id = context.user_data.get("last_prompt_id")
-        if old_msg_id:
-            await context.bot.delete_message(
-                chat_id=update.effective_chat.id,
-                message_id=old_msg_id
-            )
-    except Exception as e:
-        print("❌ خطا در حذف پیام قبلی:", e)
+    last_id = context.user_data.get("last_prompt_id")
+    if last_id:
+        try:
+            await context.bot.delete_message(update.effective_chat.id, last_id)
+        except:
+            pass
 
     # ارسال پیام راهنمای جدید
-    keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("بازگشت به منو اصلی", callback_data="main_menu")]]
-    )
     sent = await update.message.reply_text(
-        "🔍 لطفاً کد قطعه بعدی را وارد کنید یا /cancel را برای خروج وارد کنید:",
-        reply_markup=keyboard
+        "🔍 برای استعلام بعدی، کد را وارد کنید یا /cancel.",
+        reply_markup=get_next_prompt_kb()
     )
     context.user_data["last_prompt_id"] = sent.message_id
-
     return AWAITING_PART_CODE
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

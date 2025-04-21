@@ -4,9 +4,7 @@ from telegram.ext import ContextTypes
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [KeyboardButton("🔍 استعلام قطعه")],
-        [KeyboardButton("🧾 فاکتور"), KeyboardButton("💳 پرداخت")],
-        [KeyboardButton("🛒 سبد خرید"), KeyboardButton("📊 موجودی حساب")],
-        [KeyboardButton("📝 ثبت‌نام")],
+        [KeyboardButton("📝 نحوه ثبت سفارش"), KeyboardButton("🚚 نحوه تحویل")],
         [KeyboardButton("📞 تماس با ما")]
     ]
     reply_markup = ReplyKeyboardMarkup(
