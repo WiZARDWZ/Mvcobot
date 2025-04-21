@@ -18,7 +18,11 @@ from handlers.inventory import (
     AWAITING_PART_CODE,
     update_inventory_cache
 )
-from handlers.main_buttons import handle_main_buttons, get_main_menu
+from handlers.main_buttons import (
+    handle_main_buttons,
+    get_main_menu,
+    show_main_menu_from_callback
+)
 from handlers.admin import (
     disable_bot, enable_bot, blacklist_add, blacklist_remove,
     blacklist_list, set_hours, set_thursday, disable_friday,
@@ -72,14 +76,15 @@ def main():
     # /start
     app.add_handler(CommandHandler("start", start))
 
-    # مکالمه استعلام با دو هندلر در حالت AWAITING_PART_CODE
+    # مکالمه استعلام
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🔍 استعلام قطعه$"), handle_inventory_callback)],
         states={
             AWAITING_PART_CODE: [
-                # اگر کلید منوی اصلی زده شد → خارج شو
-                MessageHandler(filters.Regex("^(📦 نحوه تحویل|📝 نحوه ثبت سفارش|📞 تماس با ما)$"), handle_main_buttons),
-                # در غیر این صورت → پردازش کد
+                MessageHandler(
+                    filters.Regex("^(📝 نحوه ثبت سفارش|🚚 نحوه تحویل|📞 تماس با ما)$"),
+                    handle_main_buttons
+                ),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_inventory_input)
             ]
         },
@@ -88,16 +93,15 @@ def main():
     )
     app.add_handler(conv_handler)
 
-    # بازگشت به منو اصلی (در صورتی که با inline بخواهیم)
-    app.add_handler(CallbackQueryHandler(lambda u,c: u.callback_query.answer() or u.callback_query.message.reply_text(
-        "🏠 به منوی اصلی برگشتید. لطفاً یک گزینه را انتخاب کنید:",
-        reply_markup=get_main_menu()
-    ), pattern="^main_menu$"))
+    # دکمه inline «بازگشت به منو اصلی»
+    app.add_handler(
+        CallbackQueryHandler(show_main_menu_from_callback, pattern="^main_menu$")
+    )
 
-    # دکمه‌های غیر استعلام خارج از مکالمه
+    # دکمه‌های دیگر منو (خارج از مکالمه)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_buttons))
 
-    # دستورات مدیریتی (فقط در گروه مدیریت)
+    # دستورات مدیریتی
     app.add_handler(CommandHandler("disable", disable_bot))
     app.add_handler(CommandHandler("enable", enable_bot))
     app.add_handler(CommandHandler("blacklist_add", blacklist_add))
@@ -115,7 +119,7 @@ def main():
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("log", log_user))
 
-    # بروزرسانی کش هر ۲۰ دقیقه
+    # بروزرسانی کش
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.create_task(update_inventory_cache())

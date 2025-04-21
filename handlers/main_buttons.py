@@ -1,55 +1,79 @@
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
-from handlers.inventory import handle_inventory_callback
 
-# اصلی‌ترین منو
 def get_main_menu():
     keyboard = [
         ["🔍 استعلام قطعه"],
-        ["📦 نحوه تحویل", "📝 نحوه ثبت سفارش"],
+        ["📝 نحوه ثبت سفارش", "🚚 نحوه تحویل"],
         ["📞 تماس با ما"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-async def handle_main_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def handle_main_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
     if "استعلام" in text:
-        await handle_inventory_callback(update, context)
+        from handlers.inventory import handle_inventory_callback
+        return await handle_inventory_callback(update, context)
+
+    elif "تماس" in text:
+        await update.message.reply_text(
+            "📞 راه‌های ارتباط با ما 📞\n\n"
+            "• واتساپ و تلگرام: 09025029290\n"
+            "• تلفن دفتر: 33993328 – 33992833\n\n"
+            "ما همواره آماده پاسخگویی به سوالات و نیازهای شما هستیم! 🤝",
+            reply_markup=get_main_menu()
+        )
         return ConversationHandler.END
 
     elif "تحویل" in text:
         await update.message.reply_text(
-            "🚚 نحوه تحویل:\n"
-            "- هر روز ساعت 16:00 در دفتر بازار\n"
-            "- پنج‌شنبه‌ها ساعت 12:30\n"
-            "- ارسال فوری با پیک نیز امکان‌پذیر است.",
+            "🚚 نحوه تحویل کالا 🚚\n\n"
+            "️⃣ تحویل حضوری در دفتر بازار:\n"
+            "   • شنبه تا چهارشنبه: ساعت ۱۶:۰۰\n"
+            "   • پنج‌شنبه: ساعت ۱۲:۳۰\n\n"
+            "️⃣ ارسال فوری از انبار 🛵:\n"
+            "   • زمان تقریبی تحویل: ۶۰ دقیقه در تمام ساعات کاری\n"
+            "   • هزینه پیک بر عهده مشتری است\n\n"
+            "با آرزوی تجربهٔ خریدی دلپذیر برای شما! 🤝",
             reply_markup=get_main_menu()
         )
         return ConversationHandler.END
 
-    elif "سفارش" in text:
+    elif "ثبت سفارش" in text:
         await update.message.reply_text(
-            "📝 نحوه ثبت سفارش:\n"
-            "1. کد قطعه را ارسال کنید.\n"
-            "2. قیمت دریافت شده را تأیید نمایید.\n"
-            "3. سپس از طریق دکمه پرداخت یا تماس با پشتیبانی ادامه دهید.",
+            "🛒 ثبت سفارش قطعات 🛒\n\n"
+            "1️⃣ ابتدا از بخش 🔍 «استعلام قطعه»، نام یا کد قطعهٔ مورد نظرتان را جست‌وجو کنید.\n"
+            "2️⃣ پس از مشاهده قیمت، برند و موجودی، با تیم پشتیبانی جهت صدور فاکتور هماهنگ شوید.\n\n"
+            "📞 راه‌های ارتباط با ما:\n"
+            "• واتساپ و تلگرام: 09025029290\n"
+            "• تلفن دفتر: 33993328 – 33992833\n\n"
+            "منتظر خدمت‌رسانی به شما هستیم! 🤝",
             reply_markup=get_main_menu()
         )
         return ConversationHandler.END
 
-    elif "تماس" in text:
+    else:
         await update.message.reply_text(
-            "📞 تماس با ما:\n"
-            "برای ارتباط با پشتیبانی با شماره زیر تماس بگیرید:\n"
-            "۰۹۱۲۱۲۳۴۵۶۷",
+            "🔸 لطفاً یکی از گزینه‌های منو را انتخاب کنید.",
             reply_markup=get_main_menu()
         )
         return ConversationHandler.END
 
-    # همه‌ی پیام‌های دیگر هم منو را نشان می‌دهند و از مکالمه خارج می‌شوند
-    await update.message.reply_text(
-        "🔸 لطفاً یکی از گزینه‌های منو را انتخاب کنید.",
+async def show_main_menu_from_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    # حذف پیام قبلی (اگر پیام از نوع دکمه اینلاین بود)
+    try:
+        await query.message.delete()
+    except Exception as e:
+        print("❌ خطا در حذف پیام دکمه منو:", e)
+
+    # ارسال پیام منوی اصلی
+    await query.message.chat.send_message(
+        "🏠 به منوی اصلی برگشتید. لطفاً یک گزینه را انتخاب کنید:",
         reply_markup=get_main_menu()
     )
+
     return ConversationHandler.END
