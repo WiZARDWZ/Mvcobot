@@ -119,7 +119,7 @@ async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAUL
 async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # بررسی بلک‌لیست و ساعات کاری (مثل قبل)…
     input_text = update.message.text or ""
-    codes = re.findall(r'\b\d{5}[-_/.]?[A-Za-z0-9]{5}\b', input_text)
+    codes = re.findall(r'\b[A-Za-z0-9]{5}[-_/.]?[A-Za-z0-9]{5}\b', input_text)
     if not codes:
         # پیام خطای فرمت کد
         await update.message.reply_text(
