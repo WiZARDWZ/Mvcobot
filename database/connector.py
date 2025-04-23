@@ -225,6 +225,31 @@ def get_customer_by_phone(phone_number: str) -> dict:
     else:
         return None
 
+def get_item_info(code: str) -> Optional[dict]:
+    """
+    جستجوی قطعه بر اساس کد کامل یا تطبیق 10 رقم اول (اگر کد کامل پیدا نشد).
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+
+            # جستجوی دقیق
+            query_exact = "SELECT TOP 1 code, name, price FROM items WHERE code = ?"
+            row = cur.execute(query_exact, code).fetchone()
+            if row:
+                return {"code": row[0], "name": row[1], "price": row[2]}
+
+            # اگر کد حداقل 10 رقم داشت و چیزی پیدا نشد
+            if len(code) >= 10:
+                query_partial = "SELECT TOP 1 code, name, price FROM items WHERE code LIKE ?"
+                row = cur.execute(query_partial, f"{code[:10]}%").fetchone()
+                if row:
+                    return {"code": row[0], "name": row[1], "price": row[2]}
+
+    except Exception as e:
+        print("❌ خطا در get_item_info:", e)
+
+    return None
 
 # -------------------------------------
 

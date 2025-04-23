@@ -56,10 +56,11 @@ def set_setting(key, value):
     try:
         with get_connection() as conn:
             cur = conn.cursor()
-            cur.execute(query, k, v, k, v)
+            cur.execute(query, k, v)
             conn.commit()
     except Exception as e:
         print("❌ خطا در set_setting:", e)
+
 
 def add_to_blacklist(user_id):
     try:
