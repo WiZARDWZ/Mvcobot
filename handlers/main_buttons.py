@@ -64,16 +64,17 @@ async def show_main_menu_from_callback(update: Update, context: ContextTypes.DEF
     query = update.callback_query
     await query.answer()
 
-    # حذف پیام قبلی (اگر پیام از نوع دکمه اینلاین بود)
+    # حذف پیام اینلاین قبلی (اگه بتونه)
     try:
         await query.message.delete()
     except Exception as e:
         print("❌ خطا در حذف پیام دکمه منو:", e)
 
-    # ارسال پیام منوی اصلی
-    await query.message.chat.send_message(
-        "🏠 به منوی اصلی برگشتید. لطفاً یک گزینه را انتخاب کنید:",
+    # ارسال پیام منوی اصلی با کیبورد Reply
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text="🏠 به منوی اصلی برگشتید. لطفاً یک گزینه را انتخاب کنید:",
         reply_markup=get_main_menu()
     )
 
-    return ConversationHandler.END
+    return ConversationHandler.END  # ✅ اطمینان از خروج از وضعیت

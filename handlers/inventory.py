@@ -131,7 +131,7 @@ async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAUL
     return AWAITING_PART_CODE
 
 async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # ۱) بلک‌لیست و ساعات کاری
+    # ۱) بررسی بلک‌لیست و ساعات کاری (مثل قبل)
     uid = update.effective_user.id
     if is_blacklisted(uid):
         await update.message.reply_text("⛔️ شما در لیست سیاه هستید.")
@@ -147,6 +147,7 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
     # ۲) اعتبارسنجی فرمت دقیق ۵+۵ (با یا بدون جداکننده)
     raw = update.message.text.strip()
     if not re.fullmatch(r'[A-Za-z0-9]{5}[-_/\.]?[A-Za-z0-9]{5}', raw):
+        # ۲.۱) ارسال پیام خطا
         await update.message.reply_text(
             "⛔️ کد وارد شده معتبر نیست.\n"
             "لطفاً یکی از فرمت‌های زیر را وارد کنید:\n"
@@ -157,12 +158,31 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
             "- 12345.12345\n\n"
             "نیازی به وارد کردن کد رنگ نیست"
         )
+
+        # ۲.۲) حذف پیام راهنمای قبلی (در context.user_data ذخیره شده)
+        old = context.user_data.get("last_prompt_id")
+        if old:
+            try:
+                await context.bot.delete_message(update.effective_chat.id, old)
+            except:
+                pass
+
+        # ۲.۳) ارسال مجدد پیام راهنما با دکمه
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏠 بازگشت به منوی اصلی", callback_data="main_menu")]
+        ])
+        sent = await update.message.reply_text(
+            "🔍 برای استعلام بعدی، کد را وارد کنید یا /cancel.",
+            reply_markup=keyboard
+        )
+        context.user_data["last_prompt_id"] = sent.message_id
+
         return AWAITING_PART_CODE
 
-    # ۳) نرمال‌سازی (حذف جداکننده)
+    # ۳) نرمال‌سازی کد (حذف جداکننده)
     code = re.sub(r'[-_/\.]', '', raw).upper()
 
-    # ۴) تحویل
+    # ۴) تنظیم متن تحویل
     now = datetime.now().time()
     changeover_str = get_setting("changeover_hour") or "15:00"
     changeover = datetime.strptime(changeover_str, "%H:%M").time()
@@ -170,11 +190,18 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
     after_txt  = get_setting("delivery_after")  or "🛵 ارسال مستقیم از انبار (حدود 60 دقیقه)"
     delivery_info = before_txt if now < changeover else after_txt
 
-    # ۵) جستجو و پاسخ
+    # ۵) جستجو و نمایش نتایج
     products = _find_products(code)
     if not products:
-        await update.message.reply_text(f"⚠️ کد \u2068{code}\u2069 متأسفانه موجود نمی‌باشد.",
-    parse_mode="Markdown")
+        disp_code = code
+        if "-" not in disp_code and len(disp_code) >= 10:
+            disp_code = disp_code[:5] + "-" + disp_code[5:]
+
+        # نمایش امن کد با کاراکترهای نامرئی
+        await update.message.reply_text(
+            f"⚠️ کد \u2068{disp_code}\u2069 متأسفانه موجود نمی‌باشد.",
+            parse_mode="Markdown"
+        )
     else:
         for item in products:
             price = item.get("فی فروش", 0)
@@ -197,7 +224,7 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
                 parse_mode="Markdown"
             )
 
-    # ۶) حذف پیام قبلی و راهنمای بعدی
+    # ۶) حذف پیام راهنمای قبلی و ارسال راهنمای بعدی
     try:
         old = context.user_data.get("last_prompt_id")
         if old:
@@ -205,8 +232,13 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
     except:
         pass
 
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 بازگشت به منوی اصلی", callback_data="main_menu")]])
-    sent = await update.message.reply_text("🔍 برای استعلام بعدی، کد را وارد کنید یا /cancel.", reply_markup=keyboard)
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏠 بازگشت به منوی اصلی", callback_data="main_menu")]
+    ])
+    sent = await update.message.reply_text(
+        "🔍 برای استعلام بعدی، کد را وارد کنید یا دکمه زیره به منو اصلی بازگردید.",
+        reply_markup=keyboard
+    )
     context.user_data["last_prompt_id"] = sent.message_id
 
     return AWAITING_PART_CODE

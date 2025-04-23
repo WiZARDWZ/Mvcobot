@@ -10,6 +10,7 @@ from telegram.ext import (
     ContextTypes
 )
 from config import BOT_TOKEN
+
 from handlers.start import start
 from handlers.inventory import (
     handle_inventory_callback,
@@ -20,7 +21,6 @@ from handlers.inventory import (
 )
 from handlers.main_buttons import (
     handle_main_buttons,
-    get_main_menu,
     show_main_menu_from_callback
 )
 from handlers.admin import (
@@ -78,27 +78,28 @@ def main():
 
     # مکالمه استعلام
     conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^🔍 استعلام قطعه$"), handle_inventory_callback)],
+        entry_points=[
+            MessageHandler(filters.Regex("^🔍 استعلام قطعه$"), handle_inventory_callback)
+        ],
         states={
             AWAITING_PART_CODE: [
+                # دکمه بازگشت به منوی اصلی (inline)
+                CallbackQueryHandler(show_main_menu_from_callback, pattern="^main_menu$"),
+                # دکمه‌های متنی منوی فرعی
                 MessageHandler(
                     filters.Regex("^(📝 نحوه ثبت سفارش|🚚 نحوه تحویل|📞 تماس با ما)$"),
                     handle_main_buttons
                 ),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_inventory_input)
-            ]
+                # متن آزاد برای استعلام کد
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_inventory_input),
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True
     )
     app.add_handler(conv_handler)
 
-    # دکمه inline «بازگشت به منو اصلی»
-    app.add_handler(
-        CallbackQueryHandler(show_main_menu_from_callback, pattern="^main_menu$")
-    )
-
-    # دکمه‌های دیگر منو (خارج از مکالمه)
+    # پیام‌های متنی اصلی (پس از خروج از Conversation)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_buttons))
 
     # دستورات مدیریتی
@@ -119,7 +120,7 @@ def main():
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("log", log_user))
 
-    # بروزرسانی کش
+    # بروزرسانی کش در پس‌زمینه
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.create_task(update_inventory_cache())
