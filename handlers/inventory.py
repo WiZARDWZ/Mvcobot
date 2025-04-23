@@ -51,33 +51,37 @@ def _replace_partial(base: str, var: str):
     return base
 
 def _process_row(row: dict):
-    """Turn a raw DB row into 1+ records for each '/' variant."""
+    """Extract all valid part number variants from a single DB row."""
     recs = []
     code = row.get("کد کالا", "")
     part, brand = _extract_brand_and_part(code)
     if not part:
         part = code
-    for segment in str(part).split("/"):
-        segment = segment.strip()
-        if "-" in segment and len(segment.split("-")[-1]) >= 5:
-            current = segment
-            recs.append({
-                "شماره قطعه": current,
-                "برند": brand or row.get("نام تامین کننده", "نامشخص"),
-                "نام کالا": row.get("نام کالا", "نامشخص"),
-                "فی فروش": row.get("فی فروش", 0),
-                "Iran Code": row.get("Iran Code")
-            })
-        elif recs:
-            current = _replace_partial(recs[-1]["شماره قطعه"], segment)
-            recs.append({
-                "شماره قطعه": current,
-                "برند": brand or row.get("نام تامین کننده", "نامشخص"),
-                "نام کالا": row.get("نام کالا", "نامشخص"),
-                "فی فروش": row.get("فی فروش", 0),
-                "Iran Code": row.get("Iran Code")
-            })
+
+    base_part = part.split("/")[0]  # قبل از اسلش = کد اصلی
+    suffix = part.split("/")[1] if "/" in part else None
+
+    # ✅ رکورد اصلی بدون suffix
+    recs.append({
+        "شماره قطعه": base_part,
+        "برند": brand or row.get("نام تامین کننده", "نامشخص"),
+        "نام کالا": row.get("نام کالا", "نامشخص"),
+        "فی فروش": row.get("فی فروش", 0),
+        "Iran Code": row.get("Iran Code")
+    })
+
+    # ✅ اگر suffix مثل رنگ هم هست، اونم جداگانه ذخیره کن
+    if suffix and len(suffix) <= 5 and suffix.isalnum():
+        recs.append({
+            "شماره قطعه": f"{base_part}/{suffix}",
+            "برند": brand or row.get("نام تامین کننده", "نامشخص"),
+            "نام کالا": row.get("نام کالا", "نامشخص"),
+            "فی فروش": row.get("فی فروش", 0),
+            "Iran Code": row.get("Iran Code")
+        })
+
     return recs
+
 
 def _normalize(code: str):
     # strip invisible/unicode junk, then remove separators
@@ -119,7 +123,10 @@ async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAUL
 async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # بررسی بلک‌لیست و ساعات کاری (مثل قبل)…
     input_text = update.message.text or ""
-    codes = re.findall(r'\b[A-Za-z0-9]{5}[-_/.]?[A-Za-z0-9]{5}\b', input_text)
+    codes = re.findall(
+        r'\b[A-Za-z0-9]{5,7}[\s\-_/\.]?[A-Za-z0-9]{5,7}[A-Za-z]{0,3}?\b',
+        input_text
+    )
     if not codes:
         # پیام خطای فرمت کد
         await update.message.reply_text(
