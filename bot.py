@@ -125,7 +125,7 @@ def main():
     asyncio.set_event_loop(loop)
     loop.create_task(update_inventory_cache())
 
-    print("🤖 ربات فعال شد...")
+    print("🤖MVCO BOT STARTED / DEVELOPED BY : Mohammad Baghshomali - mbaghshomali.ir ")
     app.run_polling()
 
 if __name__ == "__main__":
