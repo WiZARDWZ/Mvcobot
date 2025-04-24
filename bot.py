@@ -26,7 +26,7 @@ from handlers.main_buttons import (
 from handlers.admin import (
     disable_bot, enable_bot, blacklist_add, blacklist_remove,
     blacklist_list, set_hours, set_thursday, disable_friday,
-    enable_friday, set_lunch_break, set_query_limit,
+    enable_friday, set_query_limit,
     set_delivery_before, set_delivery_after,
     set_changeover_hour, status, log_user
 )
@@ -112,7 +112,6 @@ def main():
     app.add_handler(CommandHandler("set_thursday", set_thursday))
     app.add_handler(CommandHandler("disable_friday", disable_friday))
     app.add_handler(CommandHandler("enable_friday", enable_friday))
-    app.add_handler(CommandHandler("set_lunch_break", set_lunch_break))
     app.add_handler(CommandHandler("set_query_limit", set_query_limit))
     app.add_handler(CommandHandler("set_delivery_info_before", set_delivery_before))
     app.add_handler(CommandHandler("set_delivery_info_after", set_delivery_after))

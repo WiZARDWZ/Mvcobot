@@ -1,6 +1,6 @@
 # config.py
 
-BOT_TOKEN = "7705555230:AAFJsjjLv94kRfJlJMcdGD1BXp3k1x1Dd9A"
+BOT_TOKEN = "7291922068:AAHB2XkU14JiV0uSMZWt6FE6fEBSZJlvTsI"
 
 DB_CONFIG = {
     "driver": "{ODBC Driver 17 for SQL Server}",
@@ -17,7 +17,13 @@ BOT_DB_CONFIG = {
     "database": "MvcobotDB",
     "trusted_connection": "yes"
 }
-
+# BOT_DB_CONFIG = {
+#     "driver": "{ODBC Driver 17 for SQL Server}",
+#     "server": "WIN-9R9B3VCBI6G\\SEPIDAR",
+#     "database": "MvcobotDB",
+#     "user": "damavand",
+#     "password": "damavand",
+# }
 BASE_URL = 'http://localhost:8585'
 API_VERSION = '1.0.0'
 REGISTRATION_CODE = '10054425'

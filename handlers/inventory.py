@@ -119,19 +119,40 @@ def _find_products(code: str):
 async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     uid = update.effective_user.id
     if is_blacklisted(uid):
-        await update.message.reply_text("⛔️ شما در لیست سیاه هستید. لطفاً برای رفع مشکل با پشتیبانی تماس بگیرید.")
+        await update.message.reply_text(
+            "⛔️ شما در لیست سیاه هستید. لطفاً برای رفع مشکل با پشتیبانی تماس بگیرید."
+        )
         return ConversationHandler.END
 
-    start = get_setting("working_start") or "08:00"
-    end   = get_setting("working_end")   or "18:00"
+    # خواندن تنظیمات ساعات کاری
+    wk_start = get_setting("working_start") or "08:00"
+    wk_end   = get_setting("working_end")   or "18:00"
+    th_start = get_setting("thursday_start") or "08:00"
+    th_end   = get_setting("thursday_end")   or "12:30"
+
+    # تشخیص روز هفته و تعیین بازه امروز
+    weekday = datetime.now().weekday()  # Mon=0 ... Thu=3
     now_time = datetime.now().time()
-    if not (datetime.strptime(start, "%H:%M").time() <= now_time < datetime.strptime(end, "%H:%M").time()):
-        await update.message.reply_text(f"⏰ ساعات کاری ربات از {start} تا {end} می‌باشد. لطفاً در این بازه برای استعلام تلاش کنید.")
+    if weekday == 3:  # پنجشنبه
+        today_start, today_end = th_start, th_end
+    else:
+        today_start, today_end = wk_start, wk_end
+
+    # اگر خارج از ساعت کاری باشیم
+    if not (datetime.strptime(today_start, "%H:%M").time() <= now_time < datetime.strptime(today_end, "%H:%M").time()):
+        await update.message.reply_text(
+            f"⏰ ساعات کاری ربات:\n"
+            f"  • شنبه تا چهارشنبه: {wk_start} تا {wk_end}\n"
+            f"  • پنجشنبه: {th_start} تا {th_end}\n\n"
+            "لطفاً در این بازه‌ها برای استعلام تلاش کنید."
+        )
         return ConversationHandler.END
 
+    # ارسال پیام اولیه و ذخیره شناسه آن
     sent = await update.message.reply_text("🔍 لطفاً کد قطعه را وارد کنید:")
     context.user_data["last_prompt_id"] = sent.message_id
     return AWAITING_PART_CODE
+
 
 async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     uid = update.effective_user.id
@@ -139,30 +160,49 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("⛔️ شما در لیست سیاه هستید.")
         return ConversationHandler.END
 
-    # بررسی ساعات کاری
-    start = get_setting("working_start") or "08:00"
-    end   = get_setting("working_end")   or "18:00"
+    # بررسی مجدد ساعات کاری
+    wk_start = get_setting("working_start") or "08:00"
+    wk_end   = get_setting("working_end")   or "18:00"
+    th_start = get_setting("thursday_start") or "08:00"
+    th_end   = get_setting("thursday_end")   or "12:30"
+
+    weekday = datetime.now().weekday()
     now_time = datetime.now().time()
-    if not (datetime.strptime(start, "%H:%M").time() <= now_time < datetime.strptime(end, "%H:%M").time()):
-        await update.message.reply_text(f"⏰ ساعات کاری ربات از {start} تا {end} می‌باشد.")
+    if weekday == 3:
+        today_start, today_end = th_start, th_end
+    else:
+        today_start, today_end = wk_start, wk_end
+
+    if not (datetime.strptime(today_start, "%H:%M").time() <= now_time < datetime.strptime(today_end, "%H:%M").time()):
+        await update.message.reply_text(
+            f"⏰ ساعات کاری ربات:\n"
+            f"  • شنبه تا چهارشنبه: {wk_start} تا {wk_end}\n"
+            f"  • پنجشنبه: {th_start} تا {th_end}\n\n"
+            "لطفاً در این بازه‌ها برای استعلام تلاش کنید."
+        )
         return ConversationHandler.END
 
-    raw = update.message.text.strip()
-    # جداکردن خطوط ورودی
+    # 👇 تبدیل اعداد فارسی به انگلیسی
+    def convert_farsi_digits(text: str) -> str:
+        farsi_digits = "۰۱۲۳۴۵۶۷۸۹"
+        english_digits = "0123456789"
+        return text.translate(str.maketrans(farsi_digits, english_digits))
+
+    # آماده‌سازی متن تحویل
+    before = get_setting("delivery_before") or "🚚 تحویل کالا هر روز ساعت 16 و پنجشنبه‌ها 12:30"
+    after  = get_setting("delivery_after")  or "🛵 ارسال مستقیم از انبار (حدود 60 دقیقه)"
+    changeover_str = get_setting("changeover_hour") or "15:00"
+    changeover_time = datetime.strptime(changeover_str, "%H:%M").time()
+    delivery_info = before if now_time < changeover_time else after
+
+    # استخراج خطوط و دسته‌بندی صحیح/ناصحیح
+    raw = convert_farsi_digits(update.message.text.strip())
     lines = [ln.strip() for ln in re.split(r'[\r\n]+', raw) if ln.strip()]
     pattern = r'^[A-Za-z0-9]{5}[-_/\.]?[A-Za-z0-9]{5}$'
-
     valid = [ln for ln in lines if re.fullmatch(pattern, ln)]
     invalid = [ln for ln in lines if not re.fullmatch(pattern, ln)]
 
-    # آماده‌سازی متن تحویل
-    now = datetime.now().time()
-    chg = datetime.strptime(get_setting("changeover_hour") or "15:00", "%H:%M").time()
-    before = get_setting("delivery_before") or "🚚 تحویل کالا هر روز ساعت 16 و پنجشنبه‌ها 12:30"
-    after  = get_setting("delivery_after")  or "🛵 ارسال مستقیم از انبار (حدود 60 دقیقه)"
-    delivery_info = before if now < chg else after
-
-    # ۱) پاسخ به کدهای معتبر
+    # پاسخ به کدهای معتبر
     seen = set()
     for ln in valid:
         norm = re.sub(r'[-_/\.]', '', ln).upper()
@@ -174,15 +214,20 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
         if not products:
             disp = ln if "-" in ln else ln[:5] + "-" + ln[5:]
             await update.message.reply_text(
-        f"⚠️ کد \u2068{disp}\u2069 متأسفانه موجود نمی‌باشد.",
-        parse_mode="Markdown")
+                f"⚠️ کد \u2068{disp}\u2069 متأسفانه موجود نمی‌باشد.",
+                parse_mode="Markdown")
         else:
             for item in products:
                 price = item.get("فی فروش", 0)
                 try:
-                    price_str = f"{int(float(price)):,} ریال"
-                except:
+                    # سعی می‌کنیم قیمت را به float تبدیل کنیم و سپس به int
+                    price_int = int(float(price))
+                    # قالب‌بندی با جداکننده هزارگان
+                    price_str = f"{price_int:,} ریال"
+                except Exception:
+                    # اگر تبدیل با خطا مواجه شد (مثلاً رشته توصیفی)
                     price_str = str(price)
+
                 iran = item.get("Iran Code") or ""
                 iran_line = f"توضیحات: {iran}\n" if iran else ""
                 await update.message.reply_text(
@@ -194,9 +239,10 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
                     f"{delivery_info}",
                     parse_mode="Markdown"
                 )
-    # ۲) سپس در صورت وجود کد نامعتبر، پیام خطای جداگانه
+
+    # در صورت وجود ورودی نامعتبر، ارسال پیام خطا
     if invalid:
-        inv_list = "、".join(invalid)
+        inv_list = ", ".join(invalid)
         await update.message.reply_text(
             "⛔️ فرمت یک یا چند کد نامعتبر است:\n"
             f"({inv_list})\n\n"
@@ -209,7 +255,7 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
             "نیازی به وارد کردن کد رنگ نیست"
         )
 
-    # ۳) حذف پیام راهنما و ارسال مجدد منوی انتهایی
+    # حذف پیام راهنما و ارسال مجدد دکمه منو
     try:
         old = context.user_data.get("last_prompt_id")
         if old:

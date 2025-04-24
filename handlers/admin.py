@@ -108,17 +108,6 @@ async def enable_friday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_setting("disable_friday", "false")
     await update.message.reply_text("✅ ربات در جمعه‌ها فعال شد.")
 
-# 10. ناهار
-async def set_lunch_break(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_chat.id):
-        return
-    try:
-        parts = {k: v for k, v in (p.split("=") for p in context.args)}
-        set_setting("lunch_start", parts["start"])
-        set_setting("lunch_end", parts["end"])
-        await update.message.reply_text(f"🍽 ناهار: {parts['start']} تا {parts['end']}")
-    except Exception:
-        await update.message.reply_text("❗️ فرمت: /set_lunch_break start=12:00 end=13:00")
 
 # 11. محدودیت استعلام
 async def set_query_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
