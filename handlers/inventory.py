@@ -59,30 +59,33 @@ def _process_row(row: dict):
     if not part:
         part = code
 
-    base_part = part.split("/")[0]  # قبل از اسلش = کد اصلی
-    suffix = part.split("/")[1] if "/" in part else None
+    parts = str(part).split('/')  # جداکردن کدها
+    last_base_code = None
 
-    # ✅ رکورد اصلی بدون suffix
-    recs.append({
-        "شماره قطعه": base_part,
-        "برند": brand or row.get("نام تامین کننده", "نامشخص"),
-        "نام کالا": row.get("نام کالا", "نامشخص"),
-        "فی فروش": row.get("فی فروش", 0),
-        "Iran Code": row.get("Iran Code")
-    })
+    for part_code in parts:
+        part_code = part_code.strip()
 
-    # ✅ اگر suffix مثل رنگ هم هست، اونم جداگانه ذخیره کن
-    if suffix and len(suffix) <= 5 and suffix.isalnum():
-        recs.append({
-            "شماره قطعه": f"{base_part}/{suffix}",
-            "برند": brand or row.get("نام تامین کننده", "نامشخص"),
-            "نام کالا": row.get("نام کالا", "نامشخص"),
-            "فی فروش": row.get("فی فروش", 0),
-            "Iran Code": row.get("Iran Code")
-        })
+        if '-' in part_code and len(part_code.split('-')[-1]) >= 5:
+            last_base_code = part_code
+            recs.append({
+                "شماره قطعه": last_base_code,
+                "برند": brand or row.get("نام تامین کننده", "نامشخص"),
+                "نام کالا": row.get("نام کالا", "نامشخص"),
+                "فی فروش": row.get("فی فروش", 0),
+                "Iran Code": row.get("Iran Code")
+            })
+        elif last_base_code:
+            new_code = _replace_partial(last_base_code, part_code)
+            last_base_code = new_code  # به‌روزرسانی
+            recs.append({
+                "شماره قطعه": new_code,
+                "برند": brand or row.get("نام تامین کننده", "نامشخص"),
+                "نام کالا": row.get("نام کالا", "نامشخص"),
+                "فی فروش": row.get("فی فروش", 0),
+                "Iran Code": row.get("Iran Code")
+            })
 
     return recs
-
 
 def _normalize(code: str):
     # strip invisible/unicode junk, then remove separators
@@ -131,12 +134,12 @@ async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAUL
     return AWAITING_PART_CODE
 
 async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # ۱) بررسی بلک‌لیست و ساعات کاری (مثل قبل)
     uid = update.effective_user.id
     if is_blacklisted(uid):
         await update.message.reply_text("⛔️ شما در لیست سیاه هستید.")
         return ConversationHandler.END
 
+    # بررسی ساعات کاری
     start = get_setting("working_start") or "08:00"
     end   = get_setting("working_end")   or "18:00"
     now_time = datetime.now().time()
@@ -144,13 +147,60 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(f"⏰ ساعات کاری ربات از {start} تا {end} می‌باشد.")
         return ConversationHandler.END
 
-    # ۲) اعتبارسنجی فرمت دقیق ۵+۵ (با یا بدون جداکننده)
     raw = update.message.text.strip()
-    if not re.fullmatch(r'[A-Za-z0-9]{5}[-_/\.]?[A-Za-z0-9]{5}', raw):
-        # ۲.۱) ارسال پیام خطا
+    # جداکردن خطوط ورودی
+    lines = [ln.strip() for ln in re.split(r'[\r\n]+', raw) if ln.strip()]
+    pattern = r'^[A-Za-z0-9]{5}[-_/\.]?[A-Za-z0-9]{5}$'
+
+    valid = [ln for ln in lines if re.fullmatch(pattern, ln)]
+    invalid = [ln for ln in lines if not re.fullmatch(pattern, ln)]
+
+    # آماده‌سازی متن تحویل
+    now = datetime.now().time()
+    chg = datetime.strptime(get_setting("changeover_hour") or "15:00", "%H:%M").time()
+    before = get_setting("delivery_before") or "🚚 تحویل کالا هر روز ساعت 16 و پنجشنبه‌ها 12:30"
+    after  = get_setting("delivery_after")  or "🛵 ارسال مستقیم از انبار (حدود 60 دقیقه)"
+    delivery_info = before if now < chg else after
+
+    # ۱) پاسخ به کدهای معتبر
+    seen = set()
+    for ln in valid:
+        norm = re.sub(r'[-_/\.]', '', ln).upper()
+        if norm in seen:
+            continue
+        seen.add(norm)
+
+        products = _find_products(norm)
+        if not products:
+            disp = ln if "-" in ln else ln[:5] + "-" + ln[5:]
+            await update.message.reply_text(
+        f"⚠️ کد \u2068{disp}\u2069 متأسفانه موجود نمی‌باشد.",
+        parse_mode="Markdown")
+        else:
+            for item in products:
+                price = item.get("فی فروش", 0)
+                try:
+                    price_str = f"{int(float(price)):,} ریال"
+                except:
+                    price_str = str(price)
+                iran = item.get("Iran Code") or ""
+                iran_line = f"توضیحات: {iran}\n" if iran else ""
+                await update.message.reply_text(
+                    f"**کد:** `\u2066{item['شماره قطعه']}\u2069`\n"
+                    f"برند: **{item['برند']}**\n"
+                    f"نام کالا: {item['نام کالا']}\n"
+                    f"قیمت: **{price_str}**\n"
+                    f"{iran_line}\n"
+                    f"{delivery_info}",
+                    parse_mode="Markdown"
+                )
+    # ۲) سپس در صورت وجود کد نامعتبر، پیام خطای جداگانه
+    if invalid:
+        inv_list = "、".join(invalid)
         await update.message.reply_text(
-            "⛔️ کد وارد شده معتبر نیست.\n"
-            "لطفاً یکی از فرمت‌های زیر را وارد کنید:\n"
+            "⛔️ فرمت یک یا چند کد نامعتبر است:\n"
+            f"({inv_list})\n\n"
+            "لطفاً فقط یکی از فرمت‌های زیر را وارد کنید:\n"
             "- 12345-12345\n"
             "- 12345_12345\n"
             "- 1234512345\n"
@@ -159,72 +209,7 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
             "نیازی به وارد کردن کد رنگ نیست"
         )
 
-        # ۲.۲) حذف پیام راهنمای قبلی (در context.user_data ذخیره شده)
-        old = context.user_data.get("last_prompt_id")
-        if old:
-            try:
-                await context.bot.delete_message(update.effective_chat.id, old)
-            except:
-                pass
-
-        # ۲.۳) ارسال مجدد پیام راهنما با دکمه
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🏠 بازگشت به منوی اصلی", callback_data="main_menu")]
-        ])
-        sent = await update.message.reply_text(
-            "🔍 برای استعلام بعدی، کد را وارد کنید یا /cancel.",
-            reply_markup=keyboard
-        )
-        context.user_data["last_prompt_id"] = sent.message_id
-
-        return AWAITING_PART_CODE
-
-    # ۳) نرمال‌سازی کد (حذف جداکننده)
-    code = re.sub(r'[-_/\.]', '', raw).upper()
-
-    # ۴) تنظیم متن تحویل
-    now = datetime.now().time()
-    changeover_str = get_setting("changeover_hour") or "15:00"
-    changeover = datetime.strptime(changeover_str, "%H:%M").time()
-    before_txt = get_setting("delivery_before") or "🚚 تحویل کالا هر روز ساعت 16 و پنجشنبه‌ها 12:30"
-    after_txt  = get_setting("delivery_after")  or "🛵 ارسال مستقیم از انبار (حدود 60 دقیقه)"
-    delivery_info = before_txt if now < changeover else after_txt
-
-    # ۵) جستجو و نمایش نتایج
-    products = _find_products(code)
-    if not products:
-        disp_code = code
-        if "-" not in disp_code and len(disp_code) >= 10:
-            disp_code = disp_code[:5] + "-" + disp_code[5:]
-
-        # نمایش امن کد با کاراکترهای نامرئی
-        await update.message.reply_text(
-            f"⚠️ کد \u2068{disp_code}\u2069 متأسفانه موجود نمی‌باشد.",
-            parse_mode="Markdown"
-        )
-    else:
-        for item in products:
-            price = item.get("فی فروش", 0)
-            try:
-                price_str = f"{int(float(price)):,} ریال"
-            except:
-                price_str = str(price)
-
-            iran = item.get("Iran Code") or ""
-            iran_line = f"توضیحات: {iran}\n" if iran else ""
-
-            await update.message.reply_text(
-                # کد با isolate و بک‌تیک، برند و قیمت بولد
-                f"کد: `\u2068{item['شماره قطعه']}\u2069`\n"
-                f"**برند:** {item['برند']}\n"
-                f"نام کالا: {item['نام کالا']}\n"
-                f"**قیمت:** {price_str}\n"
-                f"{iran_line}\n\n"
-                f"{delivery_info}",
-                parse_mode="Markdown"
-            )
-
-    # ۶) حذف پیام راهنمای قبلی و ارسال راهنمای بعدی
+    # ۳) حذف پیام راهنما و ارسال مجدد منوی انتهایی
     try:
         old = context.user_data.get("last_prompt_id")
         if old:
@@ -236,7 +221,7 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
         [InlineKeyboardButton("🏠 بازگشت به منوی اصلی", callback_data="main_menu")]
     ])
     sent = await update.message.reply_text(
-        "🔍 برای استعلام بعدی، کد را وارد کنید یا دکمه زیره به منو اصلی بازگردید.",
+        "🔍 برای استعلام بعدی، کد را وارد کنید یا /cancel.",
         reply_markup=keyboard
     )
     context.user_data["last_prompt_id"] = sent.message_id
