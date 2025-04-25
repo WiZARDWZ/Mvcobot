@@ -197,6 +197,7 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
 
     # استخراج خطوط و دسته‌بندی صحیح/ناصحیح
     raw = convert_farsi_digits(update.message.text.strip())
+    raw = re.sub(r'[\u200E\u200F\u202A-\u202E\u2066-\u2069\u200B]', '', raw)
     lines = [ln.strip() for ln in re.split(r'[\r\n]+', raw) if ln.strip()]
     pattern = r'^[A-Za-z0-9]{5}[-_/\.]?[A-Za-z0-9]{5}$'
     valid = [ln for ln in lines if re.fullmatch(pattern, ln)]
@@ -227,19 +228,28 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
                 except Exception:
                     # اگر تبدیل با خطا مواجه شد (مثلاً رشته توصیفی)
                     price_str = str(price)
+                # ۱) اضافه کردن LRM دورِ رشته‌ی کد
+                raw_code = item['شماره قطعه']
+                ltr_code = "\u200E" + raw_code + "\u200E"
 
                 iran = item.get("Iran Code") or ""
                 iran_line = f"توضیحات: {iran}\n" if iran else ""
-                await update.message.reply_text(
-                    f"**کد:** `\u2066{item['شماره قطعه']}\u2069`\n"
-                    f"برند: **{item['برند']}**\n"
-                    f"نام کالا: {item['نام کالا']}\n"
-                    f"قیمت: **{price_str}**\n"
-                    f"{iran_line}\n"
-                    f"{delivery_info}",
-                    parse_mode="Markdown"
-                )
+                code_md = escape_markdown(ltr_code, version=1)
+                brand_md = escape_markdown(item['برند'], version=1)
+                name_md = escape_markdown(item['نام کالا'], version=1)
+                price_md = escape_markdown(price_str, version=1)
+                delivery_md = escape_markdown(delivery_info, version=1)
+                iran_md = escape_markdown(iran, version=1) if iran else ""
 
+                text = (
+                    f"*کد:* `{code_md}`\n"
+                    f"*برند:* {brand_md}\n"
+                    f"نام کالا: {name_md}\n"
+                    f"*قیمت:* {price_md}\n"
+                    f"{('توضیحات: ' + iran_md + '\\n') if iran_md else ''}\n"
+                    f"{delivery_md}"
+                )
+                await update.message.reply_text(text, parse_mode="Markdown")
     # در صورت وجود ورودی نامعتبر، ارسال پیام خطا
     if invalid:
         inv_list = ", ".join(invalid)

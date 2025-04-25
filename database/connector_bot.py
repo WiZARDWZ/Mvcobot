@@ -3,15 +3,23 @@ from datetime import datetime
 from typing import Optional, List
 from config import BOT_DB_CONFIG
 
+# def get_connection():
+#     conn_str = (
+#         f"DRIVER={BOT_DB_CONFIG['driver']};"
+#         f"SERVER={BOT_DB_CONFIG['server']};"
+#         f"DATABASE={BOT_DB_CONFIG['database']};"
+#         f"Trusted_Connection={BOT_DB_CONFIG.get('trusted_connection','no')};"
+#     )
+#     return pyodbc.connect(conn_str, timeout=30)
 def get_connection():
     conn_str = (
         f"DRIVER={BOT_DB_CONFIG['driver']};"
         f"SERVER={BOT_DB_CONFIG['server']};"
         f"DATABASE={BOT_DB_CONFIG['database']};"
-        f"Trusted_Connection={BOT_DB_CONFIG.get('trusted_connection','no')};"
+        f"UID={BOT_DB_CONFIG['user']};"
+        f"PWD={BOT_DB_CONFIG['password']};"
     )
     return pyodbc.connect(conn_str, timeout=30)
-
 def log_message(user_id, chat_id, direction, text):
     try:
         uid = int(user_id)

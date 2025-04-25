@@ -15,20 +15,20 @@ logger = logging.getLogger(__name__)
 class DatabaseConnector:
     def __init__(self):
         # در صورت استفاده از تنظیمات DB_CONFIG می‌توانید از این بخش استفاده کنید.
-        # self.connection_string = (
-        #     f"DRIVER={DB_CONFIG['driver']};"
-        #     f"SERVER={DB_CONFIG['server']};"
-        #     f"DATABASE={DB_CONFIG['database']};"
-        #     f"UID={DB_CONFIG['user']};"
-        #     f"PWD={DB_CONFIG['password']};"
-        #     "Encrypt=yes;TrustServerCertificate=yes;"
-        # )
         self.connection_string = (
-            "DRIVER={ODBC Driver 17 for SQL Server};"
-            "SERVER=AMIN\\MVCO;"
-            "DATABASE=Sepidar01;"
-            "Trusted_Connection=yes;"
+            f"DRIVER={DB_CONFIG['driver']};"
+            f"SERVER={DB_CONFIG['server']};"
+            f"DATABASE={DB_CONFIG['database']};"
+            f"UID={DB_CONFIG['user']};"
+            f"PWD={DB_CONFIG['password']};"
+            "Encrypt=yes;TrustServerCertificate=yes;"
         )
+        # self.connection_string = (
+        #     "DRIVER={ODBC Driver 17 for SQL Server};"
+        #     "SERVER=AMIN\\MVCO;"
+        #     "DATABASE=Sepidar01;"
+        #     "Trusted_Connection=yes;"
+        # )
         self.timeout = 30
 
     def _get_connection(self):
