@@ -1,6 +1,6 @@
 # config.py
 
-BOT_TOKEN = "7291922068:AAHB2XkU14JiV0uSMZWt6FE6fEBSZJlvTsI"
+BOT_TOKEN = "7570544705:AAGc-DPFEOpW08HIGjsFR8MdykNrlbaU5-4"
 
 DB_CONFIG = {
     "driver": "{ODBC Driver 17 for SQL Server}",
