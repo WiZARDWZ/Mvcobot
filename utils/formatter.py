@@ -1,4 +1,9 @@
+# utils/formatter.py
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+# منطقهٔ زمانی تهران
+_TEHRAN = ZoneInfo("Asia/Tehran")
 
 
 def format_price(price):
@@ -9,7 +14,7 @@ def format_price(price):
 
 
 def get_delivery_info():
-    now = datetime.now().time()
+    now = datetime.now(_TEHRAN).time()
     changeover_time = datetime.strptime("15:00", "%H:%M").time()
 
     if now < changeover_time:
@@ -37,13 +42,15 @@ def format_inventory_response(items):
     response += f"\n⏰ {get_delivery_info()}"
     return response
 
+
 def format_invoices_message(invoices: list) -> str:
-    message_lines = []
-    for invoice in invoices:
-        # فرمت‌دهی برای هر فاکتور؛ به عنوان مثال:
-        line = (f"<b>شماره فاکتور:</b> {invoice.get('Number')}\n"
-                f"<b>تاریخ:</b> {invoice.get('Date')}\n"
-                f"<b>مبلغ کل:</b> {invoice.get('Price')}\n"
-                "-----------------------")
-        message_lines.append(line)
-    return "\n".join(message_lines)
+    lines = []
+    for inv in invoices:
+        line = (
+            f"<b>شماره فاکتور:</b> {inv.get('Number')}\n"
+            f"<b>تاریخ:</b> {inv.get('Date')}\n"
+            f"<b>مبلغ کل:</b> {inv.get('Price')}\n"
+            "-----------------------"
+        )
+        lines.append(line)
+    return "\n".join(lines)
