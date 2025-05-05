@@ -1,3 +1,5 @@
+# handlers/inventory.py
+
 import re
 import asyncio
 from datetime import datetime, time
@@ -19,12 +21,11 @@ _cached_inventory_data: list[dict] = []
 _inventory_index: dict[str, list[dict]] = {}
 _sorted_keys: list[str] = []
 
-# الگوها: یکی برای اعتبارسنجی کامل ورودی کاربر
-_PART_PATTERN   = re.compile(r'^[A-Za-z0-9]{5}[-_/\. ]?[A-Za-z0-9]{2,5}$')
-# و یکی برای استخراج همه‌ی کدهای معتبر از متن (شامل جداکننده اسپیس)
-_CODE_REGEX     = re.compile(r'\b[A-Za-z0-9]{5}[-_/\. ]?[A-Za-z0-9]{2,5}\b')
+# الگوها
+_PART_PATTERN = re.compile(r'^[A-Za-z0-9]{5}[-_/\. ]?[A-Za-z0-9]{2,5}$')
+_CODE_REGEX   = re.compile(r'\b[A-Za-z0-9]{5}[-_/\. ]?[A-Za-z0-9]{2,5}\b')
 
-# منطقهٔ زمانی تهران برای همهٔ فراخوانی‌های زمان
+# منطقهٔ زمانی تهران
 _TEHRAN = ZoneInfo("Asia/Tehran")
 
 
@@ -44,12 +45,14 @@ async def update_inventory_cache():
             if raw:
                 records = [rec for row in raw for rec in _process_row(row)]
                 _cached_inventory_data = records
+
                 idx: dict[str, list[dict]] = {}
                 for rec in records:
                     key = _normalize(rec.get("شماره قطعه", ""))
                     idx.setdefault(key, []).append(rec)
                 _inventory_index = idx
                 _sorted_keys = sorted(idx.keys())
+
                 now = datetime.now(_TEHRAN)
                 print(f"[{now}] Cache refreshed: {len(records)} records")
             else:
@@ -84,6 +87,7 @@ def _process_row(row: dict) -> list[dict]:
     part, brand = _extract_brand_and_part(code)
     if not part:
         part = code
+
     parts = str(part).split('/')
     last_base = None
     for pc in parts:
@@ -162,14 +166,12 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("⛔️ شما در لیست سیاه هستید.")
         return ConversationHandler.END
 
-    # تکرار چک ساعات کاری
     wk_start = _parse_time_setting("working_start", "08:00")
     wk_end   = _parse_time_setting("working_end",   "18:00")
     th_start = _parse_time_setting("thursday_start","08:00")
     th_end   = _parse_time_setting("thursday_end",  "12:30")
     now      = datetime.now(_TEHRAN)
-    wd       = now.weekday()
-    now_time = now.time()
+    wd, now_time = now.weekday(), now.time()
 
     if (wd == 4 or
         (wd == 3 and not (th_start <= now_time < th_end)) or
@@ -187,14 +189,10 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
     raw = raw.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
     raw = re.sub(r'[\u200E\u200F\u202A-\u202E\u2066-\u2069\u200B]', '', raw)
 
-    # استخراج همه‌ی کدها از متن (شامل جداکننده اسپیس)
-    valid_codes = _CODE_REGEX.findall(raw)
+    valid_codes   = _CODE_REGEX.findall(raw)
+    leftover      = _CODE_REGEX.sub(' ', raw)
+    invalid_parts = [tok for tok in re.split(r'\s+', leftover) if tok]
 
-    # حذف کدها برای به‌دست آوردن ورودی‌های نامعتبر
-    leftover = _CODE_REGEX.sub(' ', raw)
-    invalid_entries = [tok for tok in re.split(r'[\s]+', leftover) if tok]
-
-    # پردازش هر کد معتبر
     for code_str in valid_codes:
         norm     = _normalize(code_str)
         products = _find_products(norm)
@@ -209,11 +207,13 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
                     suggestion = sorted(candidates, key=lambda it: _normalize(it["شماره قطعه"]))[0]
                     disp       = code_str.replace(' ', '')  # نمایش استاندارد
                     if '-' not in disp:
-                        disp = disp[:5] + "-" + disp[5:]
-                    await update.message.reply_text(
-                        f"⚠️ `{disp}` متأسفانه موجود نمی‌باشد.",
-                        parse_mode="Markdown"
-                    )
+                        clean = re.sub(r'[^A-Za-z0-9]', '', code_str)
+                        disp = f"{clean[:5]}-{clean[5:]}"
+                        await update.message.reply_text(
+                            # 1. RLM قبل، 2. RLI قبل از backtick، 3. PDI بعد از backtick، 4. RLM بعد
+                            f"\u200F⚠️ \u202A`{disp}`\u202C متأسفانه موجود نمی‌باشد.\u200F",
+                            parse_mode="Markdown"
+                        )
                     await update.message.reply_text("🔍 آیا منظور شما این کالا است؟")
                     raw_code  = suggestion["شماره قطعه"]
                     code_md   = escape_markdown("\u200E"+raw_code+"\u200E", version=1)
@@ -236,17 +236,17 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
                     )
                     continue
 
-            # اگر پیشنهاد هم نبود یا کد کامل بود ولی موجود نبود
-            disp = code_str.replace(' ', '')
-            if '-' not in disp:
-                disp = disp[:5] + "-" + disp[5:]
+            # حالت عادی «موجود نیست»
+            clean = re.sub(r'[^A-Za-z0-9]', '', code_str)
+            disp = f"{clean[:5]}-{clean[5:]}"
             await update.message.reply_text(
-                f"⚠️ `{disp}` متأسفانه موجود نمی‌باشد.",
+                # 1. RLM قبل، 2. RLI قبل از backtick، 3. PDI بعد از backtick، 4. RLM بعد
+                f"\u200F⚠️ \u202A`{disp}`\u202C متأسفانه موجود نمی‌باشد.\u200F",
                 parse_mode="Markdown"
             )
             continue
 
-        # اگر محصول(ات) موجود بود
+        # کالا(ها) موجود
         changeover = time(15, 0)
         before_msg = get_setting("delivery_before") or "🚚 تحویل کالا هر روز ساعت 16 و پنج‌شنبه‌ها 12:30"
         after_msg  = get_setting("delivery_after")  or "🛵 ارسال مستقیم از انبار (حدود 60 دقیقه)"
@@ -275,9 +275,8 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
                 parse_mode="Markdown"
             )
 
-    # اگر هر ورودی نامعتبری باقی مانده، یک‌بار پیام خطا بفرست
-    if invalid_entries:
-        bad = ", ".join(f"`{escape_markdown(x, version=1)}`" for x in invalid_entries)
+    if invalid_parts:
+        bad = ", ".join(f"`{escape_markdown(x, version=1)}`" for x in invalid_parts)
         await update.message.reply_text(
             "⛔️ فرمت یک یا چند کد نامعتبر است:\n"
             f"{bad}\n\n"
@@ -287,11 +286,13 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
             "- `1234512345`\n"
             "- `12345/12345`\n"
             "- `12345 12345`\n"
-            "- `12345.12345`",
+            "- `12345.12345`\n\n"
+            "❕ نیازی به وارد کردن کد رنگ نیست. مثال‌:\n"
+            "`❌ 95720-3M000af`\n"
+            "`✅ 95720-3M000`",
             parse_mode="Markdown"
         )
 
-    # دکمه بازگشت و راهنمای استعلام بعدی
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("🏠 بازگشت به منوی اصلی", callback_data="main_menu")]
     ])
