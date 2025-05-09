@@ -1,5 +1,3 @@
-# handlers/inventory.py
-
 import re
 import asyncio
 from datetime import datetime, time
@@ -210,7 +208,6 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
                         clean = re.sub(r'[^A-Za-z0-9]', '', code_str)
                         disp = f"{clean[:5]}-{clean[5:]}"
                         await update.message.reply_text(
-                            # 1. RLM قبل، 2. RLI قبل از backtick، 3. PDI بعد از backtick، 4. RLM بعد
                             f"\u200F⚠️ \u202A`{disp}`\u202C متأسفانه موجود نمی‌باشد.\u200F",
                             parse_mode="Markdown"
                         )
@@ -240,7 +237,6 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
             clean = re.sub(r'[^A-Za-z0-9]', '', code_str)
             disp = f"{clean[:5]}-{clean[5:]}"
             await update.message.reply_text(
-                # 1. RLM قبل، 2. RLI قبل از backtick، 3. PDI بعد از backtick، 4. RLM بعد
                 f"\u200F⚠️ \u202A`{disp}`\u202C متأسفانه موجود نمی‌باشد.\u200F",
                 parse_mode="Markdown"
             )
@@ -293,15 +289,27 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
             parse_mode="Markdown"
         )
 
+    # حذف پیام راهنمای قبلی
+    try:
+        prev = context.user_data.get("last_prompt_id")
+        if prev:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=prev
+            )
+    except:
+        pass
+
+    # ارسال پیام جدید و ذخیره‌ی شناسه‌ی آن
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("🏠 بازگشت به منوی اصلی", callback_data="main_menu")]
     ])
-    await update.message.reply_text(
+    sent = await update.message.reply_text(
         "🔍 برای استعلام بعدی، کد را وارد کنید یا /cancel.",
         reply_markup=keyboard
     )
+    context.user_data["last_prompt_id"] = sent.message_id
     return AWAITING_PART_CODE
-
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
