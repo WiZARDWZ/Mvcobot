@@ -68,15 +68,30 @@ def _extract_brand_and_part(code: str):
 
 
 def _replace_partial(base: str, var: str):
+    """بازنویسی بخش انتهایی کد مادر با قطعهٔ کوتاه‌تر
+
+    اگر *var* کمتر از ۵ کاراکتر باشد (فارغ از اینکه صرفاً رقم باشد یا ترکیب
+    حروف/رقم)، به همان اندازه از انتهای بخش ۵ رقمیِ کد مادر جایگزین می‌شود.
+
+    مثال:
+        base = "22224-3c100"
+        _replace_partial(base, "AA0") ➜ "22224-3cAA0"
+        _replace_partial(base, "AB0") ➜ "22224-3cAB0"
+    """
     try:
         pfx, sfx = base.rsplit("-", 1)
-    except ValueError:
+    except ValueError:  # اگر خط تیره پیدا نشد
         return base
-    if var.isdigit() and len(var) < 5:
-        return f"{pfx}-{sfx[:-len(var)]}{var}"
+
+    if len(var) < 5:  # جای‌گذاری روی همان تعداد کاراکتر انتهایی
+        cut_len = len(var)
+        trimmed = sfx[:-cut_len] if len(sfx) >= cut_len else ""
+        return f"{pfx}-{trimmed}{var}"
+
     if len(var) == 5:
         return f"{pfx}-{var}"
-    return base
+
+    return base  # در غیر این صورت تغییری نده
 
 
 def _process_row(row: dict) -> list[dict]:
@@ -124,7 +139,6 @@ def _find_products(key: str) -> list[dict]:
         if candidates:
             return sorted(candidates, key=lambda it: _normalize(it["شماره قطعه"]))
     return []
-
 
 # ================= Telegram Handlers =================
 
