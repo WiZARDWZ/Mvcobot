@@ -20,8 +20,8 @@ _inventory_index: dict[str, list[dict]] = {}
 _sorted_keys: list[str] = []
 
 # الگوها
-_PART_PATTERN = re.compile(r'^[A-Za-z0-9]{5}[-_/\. ]?[A-Za-z0-9]{2,5}$')
-_CODE_REGEX   = re.compile(r'\b[A-Za-z0-9]{5}[-_/\. ]?[A-Za-z0-9]{2,5}\b')
+_PART_PATTERN = re.compile(r'^[A-Za-z0-9]{5}(?:[-_/\. ]+)?[A-Za-z0-9]{5}$')
+_CODE_REGEX   = re.compile(r'\b[A-Za-z0-9]{5}(?:[-_/\. ]+)?[A-Za-z0-9]{5}\b')
 
 # منطقهٔ زمانی تهران
 _TEHRAN = ZoneInfo("Asia/Tehran")
@@ -88,7 +88,7 @@ def _replace_partial(base: str, var: str):
         trimmed = sfx[:-cut_len] if len(sfx) >= cut_len else ""
         return f"{pfx}-{trimmed}{var}"
 
-    if len(var) == 5:
+    if len(var) >= 5:  # واریانت با طول ۵ یا بیشتر کل پسوند را می‌پوشاند
         return f"{pfx}-{var}"
 
     return base  # در غیر این صورت تغییری نده
