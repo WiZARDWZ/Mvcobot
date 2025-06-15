@@ -143,6 +143,10 @@ def _find_products(key: str) -> list[dict]:
 # ================= Telegram Handlers =================
 
 async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if get_setting("enabled") != "true":
+        await update.message.reply_text("⛔️ ربات غیرفعال است. لطفاً بعداً مراجعه کنید.")
+        return ConversationHandler.END
+
     uid = update.effective_user.id
     if is_blacklisted(uid):
         await update.message.reply_text("⛔️ شما در لیست سیاه هستید.")
@@ -173,6 +177,10 @@ async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAUL
 
 
 async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if get_setting("enabled") != "true":
+        await update.message.reply_text("⛔️ ربات غیرفعال است. لطفاً بعداً مراجعه کنید.")
+        return ConversationHandler.END
+
     uid = update.effective_user.id
     if is_blacklisted(uid):
         await update.message.reply_text("⛔️ شما در لیست سیاه هستید.")

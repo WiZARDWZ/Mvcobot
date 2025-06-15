@@ -1,7 +1,11 @@
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InputFile
 from telegram.ext import ContextTypes
+from database.connector_bot import get_setting
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if get_setting("enabled") != "true":
+        await update.message.reply_text("⛔️ ربات غیرفعال است. لطفاً بعداً مراجعه کنید.")
+        return
     keyboard = [
         [KeyboardButton("🔍 استعلام قطعه")],
         [KeyboardButton("📝 نحوه ثبت سفارش"), KeyboardButton("🚚 نحوه تحویل")],

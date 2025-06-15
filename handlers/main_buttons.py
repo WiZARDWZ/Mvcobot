@@ -1,5 +1,6 @@
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
+from database.connector_bot import get_setting
 
 def get_main_menu():
     keyboard = [
@@ -10,6 +11,10 @@ def get_main_menu():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 async def handle_main_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if get_setting("enabled") != "true":
+        await update.message.reply_text("⛔️ ربات غیرفعال است. لطفاً بعداً مراجعه کنید.")
+        return ConversationHandler.END
+
     text = update.message.text.strip()
 
     if "استعلام" in text:
