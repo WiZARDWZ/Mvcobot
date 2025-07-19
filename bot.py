@@ -31,6 +31,7 @@ from handlers.admin import (
     set_changeover_hour, status, log_user
 )
 from database.connector_bot import log_message, is_blacklisted
+from ssh_tunnel import ensure_tunnel
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -65,6 +66,9 @@ async def unknown_message(update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔸 لطفاً یکی از گزینه‌های منو را انتخاب کنید.")
 
 def main():
+    # Establish SSH tunnel for stable connectivity
+    ensure_tunnel()
+
     app = Application.builder().token(BOT_TOKEN).build()
 
     # اولویت ۱: لاگ و فوروارد
