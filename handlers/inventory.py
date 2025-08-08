@@ -243,14 +243,17 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
                         price_md = escape_markdown(f"{pv:,} ریال", version=1)
                     except:
                         price_md = escape_markdown(str(suggestion.get("فی فروش",0)), version=1)
-                    desc     = suggestion.get("Iran Code") or f"با کد{raw_code} موجود است."
-                    desc_md  = escape_markdown(desc, version=1)
+
+                    # ✅ فقط اگر Iran Code موجود باشد، توضیحات را نمایش بده
+                    iran_txt = suggestion.get("Iran Code") or ""
+                    iran_line = f"توضیحات: {escape_markdown(iran_txt, version=1)}\n" if iran_txt else ""
+
                     await update.message.reply_text(
                         f"*کد:* `{code_md}`\n"
                         f"*برند:* {brand_md}\n"
                         f"نام کالا: {name_md}\n"
                         f"*قیمت:* {price_md}\n"
-                        f"توضیحات: {desc_md}",
+                        f"{iran_line}",
                         parse_mode="Markdown"
                     )
                     continue
@@ -304,10 +307,7 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
             "- `1234512345`\n"
             "- `12345/12345`\n"
             "- `12345 12345`\n"
-            "- `12345.12345`\n\n"
-            "❕ نیازی به وارد کردن کد رنگ نیست. مثال‌:\n"
-            "`❌ 95720-3M000af`\n"
-            "`✅ 95720-3M000`",
+            "- `12345.12345`\n\n",
             parse_mode="Markdown"
         )
 
