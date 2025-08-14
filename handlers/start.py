@@ -1,6 +1,17 @@
+import os, sys
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InputFile
 from telegram.ext import ContextTypes
 from database.connector_bot import get_setting
+
+def resource_path(relative_path: str) -> str:
+    """
+    مسیر فایل‌های دیتا را چه در حالت سورس (dev) و چه داخل exe برمی‌گرداند.
+    """
+    if hasattr(sys, "_MEIPASS"):
+        base_path = sys._MEIPASS  # type: ignore[attr-defined]
+    else:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if get_setting("enabled") != "true":
@@ -17,8 +28,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         one_time_keyboard=False
     )
 
-    # ارسال عکس خوش‌آمدگویی
-    with open("assets/welcome.jpg", "rb") as photo:
+    # ارسال عکس خوش‌آمدگویی (سازگار با PyInstaller)
+    photo_path = resource_path("assets/welcome.jpg")
+    with open(photo_path, "rb") as photo:
         await update.message.reply_photo(
             photo=InputFile(photo),
             caption=(

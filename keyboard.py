@@ -1,15 +1,22 @@
-from telegram import ReplyKeyboardMarkup
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 
 def main_menu_reply():
-    # منوی ثابت پایین با دکمه تماس با ما
-    return ReplyKeyboardMarkup([
-        ["🔍 استعلام قطعه", "🛒 سبد خرید"],
-        ["🧾 فاکتور", "💰 مانده حساب"],
-        ["📱 ثبت نام", "💳 پرداخت آنلاین"],
-        ["📞 تماس با ما"]
-    ], resize_keyboard=True)
+    """
+    منوی اصلی (۳ ردیف دقیقاً مطابق خواسته)
+    """
+    return ReplyKeyboardMarkup(
+        [
+            ["🔍 استعلام قطعه"],
+            ["📝 نحوه ثبت سفارش", "🚚 نحوه تحویل"],
+            ["📞 تماس با ما"]
+        ],
+        resize_keyboard=True
+    )
 
-keyboard = InlineKeyboardMarkup([
-    [InlineKeyboardButton("بازگشت به منو اصلی", callback_data="BACK_TO_MAIN_MENU")]
-])
+def back_to_main_inline():
+    """
+    دکمه‌ی اینلاین برای بازگشت به منوی اصلی.
+    """
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏠 بازگشت به منوی اصلی", callback_data="main_menu")]
+    ])

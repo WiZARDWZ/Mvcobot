@@ -1,14 +1,8 @@
-from telegram import Update, ReplyKeyboardMarkup
+# main_buttons.py
+from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
 from database.connector_bot import get_setting
-
-def get_main_menu():
-    keyboard = [
-        ["🔍 استعلام قطعه"],
-        ["📝 نحوه ثبت سفارش", "🚚 نحوه تحویل"],
-        ["📞 تماس با ما"]
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+from keyboard import main_menu_reply  # استفاده از منوی اصلی استاندارد
 
 async def handle_main_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if get_setting("enabled") != "true":
@@ -28,7 +22,7 @@ async def handle_main_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
             "• تلگرام: @mvcoparts1\n"
             "• تلفن دفتر: 33993328 – 33992833\n\n"
             "ما همواره آماده پاسخگویی به سوالات و نیازهای شما هستیم!",
-            reply_markup=get_main_menu()
+            reply_markup=main_menu_reply()
         )
         return ConversationHandler.END
 
@@ -42,7 +36,7 @@ async def handle_main_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
             "   • زمان تقریبی تحویل: 45 دقیقه در تمام ساعات کاری\n"
             "   • هزینه پیک بر عهده مشتری است\n\n"
             "با آرزوی تجربهٔ خریدی دلپذیر برای شما! ",
-            reply_markup=get_main_menu()
+            reply_markup=main_menu_reply()
         )
         return ConversationHandler.END
 
@@ -55,16 +49,17 @@ async def handle_main_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
             "• واتساپ و تلگرام: 09025029290\n"
             "• تلفن دفتر: 33993328 – 33992833\n\n"
             "منتظر خدمت‌رسانی به شما هستیم! ",
-            reply_markup=get_main_menu()
+            reply_markup=main_menu_reply()
         )
         return ConversationHandler.END
 
     else:
         await update.message.reply_text(
             "🔸 لطفاً یکی از گزینه‌های منو را انتخاب کنید.",
-            reply_markup=get_main_menu()
+            reply_markup=main_menu_reply()
         )
         return ConversationHandler.END
+
 
 async def show_main_menu_from_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -74,13 +69,13 @@ async def show_main_menu_from_callback(update: Update, context: ContextTypes.DEF
     try:
         await query.message.delete()
     except Exception as e:
-        print("❌ خطا در حذف پیام دکمه منو:", e)
+        print("❌ Error deleting inline menu message:", e)
 
-    # ارسال پیام منوی اصلی با کیبورد Reply
+    # ارسال پیام منوی اصلی با کیبورد ReplyKeyboardMarkup
     await context.bot.send_message(
         chat_id=query.message.chat_id,
         text="🏠 به منوی اصلی برگشتید. لطفاً یک گزینه را انتخاب کنید:",
-        reply_markup=get_main_menu()
+        reply_markup=main_menu_reply()
     )
 
-    return ConversationHandler.END  # ✅ اطمینان از خروج از وضعیت
+    return ConversationHandler.END
