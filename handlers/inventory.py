@@ -341,7 +341,13 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
 
             if candidates:
                 suggestion = sorted(candidates, key=lambda it: _normalize(it["شماره قطعه"]))[0]
-                await update.message.reply_text("🔍 آیا منظور شما این کالا است؟")
+
+                # --- UNIFIED TEMPLATE WITH FULL CODE ---
+                changeover = time(15, 0)
+                before_msg = get_setting("delivery_before") or "🚚 تحویل کالا هر روز ساعت 16 و پنج‌شنبه‌ها 12:30"
+                after_msg  = get_setting("delivery_after")  or "🛵 ارسال مستقیم از انبار (حدود 60 دقیقه)"
+                now_time   = datetime.now(_TEHRAN).time()
+                delivery   = before_msg if now_time < changeover else after_msg
 
                 raw_code   = suggestion["شماره قطعه"]
                 code_md    = escape_markdown("\u200E"+raw_code+"\u200E", version=1)
@@ -353,21 +359,27 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
                 except:
                     price_md = escape_markdown(str(suggestion.get("فی فروش", 0)), version=1)
 
-                iran_txt  = suggestion.get("Iran Code") or f"با کد{raw_code} موجود است."
-                iran_line = f"توضیحات: {escape_markdown(iran_txt, version=1)}"
+                # ---- FIX #1: No fabricated description; show only if DB has it
+                iran_txt  = suggestion.get("Iran Code") or ""
+                iran_line = f"توضیحات: {escape_markdown(iran_txt, version=1)}" if iran_txt else ""
+                delivery_md = escape_markdown(delivery, version=1)
 
                 await update.message.reply_text(
                     f"*کد:* `{code_md}`\n"
                     f"*برند:* {brand_md}\n"
                     f"نام کالا: {name_md}\n"
                     f"*قیمت:* {price_md}\n"
-                    f"{iran_line}",
+                    + (f"{iran_line}\n" if iran_line else "")
+                    + f"{delivery_md}",
                     parse_mode="Markdown"
                 )
                 continue
 
-            # No suggestion (partial)  ---- FIX: use user-facing disp, not undefined var
-            await update.message.reply_text(f"⚠️ {disp} متأسفانه موجود نمی‌باشد.‏")
+            # ---- FIX #2: Unified "not found" message for partial codes
+            await update.message.reply_text(
+                f"\u200F⚠️ \u202A`{_fmt_disp(norm)}`\u202C متأسفانه موجود نمی‌باشد.\u200F",
+                parse_mode="Markdown"
+            )
             continue
 
         # Fallback too short/invalid

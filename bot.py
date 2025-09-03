@@ -13,6 +13,7 @@ from telegram.ext import (
     ConversationHandler,
     ContextTypes
 )
+from telegram.error import BadRequest  # ⬅️ برای هندل ارورهای callback قدیمی
 from config import BOT_TOKEN
 
 from handlers.start import start
@@ -36,6 +37,25 @@ from handlers.admin import (
     refresh_cache_command,
 )
 from database.connector_bot import log_message, is_blacklisted
+
+# ⬇️ ایمن‌سازی: اگر wa_sync موجود نبود، ربات تلگرام بالا بیاید و اخطار دهد
+try:
+    from handlers.wa_sync import register_wa_sync_handlers
+    _HAS_WA_SYNC = True
+except Exception as e:
+    logging.warning("WA sync not available: %s", e)
+    def register_wa_sync_handlers(app):  # fallback no-op
+        logging.warning("register_wa_sync_handlers: skipped (wa_sync missing).")
+    _HAS_WA_SYNC = False
+
+# ⬇️ برای تضمین استارت واتساپ از post_init
+try:
+    from wa.manager import wa_controller
+    _HAS_WA_MANAGER = True
+except Exception as e:
+    logging.warning("WA manager not available: %s", e)
+    wa_controller = None
+    _HAS_WA_MANAGER = False
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -82,16 +102,34 @@ async def unknown_message(update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔸 لطفاً یکی از گزینه‌های منو را انتخاب کنید.")
 
 
+# ✅ Error Handler جهانی: نذار هیچ Exception خام باعث توقف بشود
+async def _global_error_handler(update, context: ContextTypes.DEFAULT_TYPE):
+    err = context.error
+    try:
+        msg = (str(err) or "").lower()
+        # خطای رایج کلیک روی دکمه قدیمی:
+        if isinstance(err, BadRequest) and (
+            "query is too old" in msg or "query id is invalid" in msg or "query_id_invalid" in msg
+        ):
+            logging.warning("Ignoring old/invalid callback query.")
+            return
+        logging.exception("Unhandled error in update handler", exc_info=err)
+    except Exception:
+        logging.exception("Error while handling an error!")
+
+
 def main():
     async def _post_init(application):
         start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"[{start_time}] MVCO BOT starting up...")
 
+        # --- ریفرش اولیه کش انبار
         try:
             await refresh_inventory_cache_once()
         except Exception as e:
             print(f"[{start_time}] WARNING: Initial cache refresh failed: {e}")
 
+        # --- ریفرش دوره‌ای کش
         if application.job_queue:
             async def _tick_refresh(context: ContextTypes.DEFAULT_TYPE):
                 await refresh_inventory_cache_once()
@@ -107,6 +145,14 @@ def main():
                     await asyncio.sleep(20 * 60)
             application.create_task(_bg_loop())
 
+        # --- تضمین استارت واتساپ همین‌جا (حتی اگر Job اولیه miss شود)
+        if _HAS_WA_MANAGER and wa_controller is not None:
+            try:
+                await wa_controller.start()
+                print("[WA] started from post_init")
+            except Exception as e:
+                print(f"[WA] start from post_init failed: {e}")
+
     # ✅ Persistence: keep conversations & user_data across restarts
     persistence = PicklePersistence(filepath=_state_file(), update_interval=30)
 
@@ -117,6 +163,9 @@ def main():
         .post_init(_post_init)
         .build()
     )
+
+    # ⬅️ ثبت Error Handler جهانی
+    app.add_error_handler(_global_error_handler)
 
     # core handlers
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, forward_and_log), group=-1)
@@ -145,7 +194,7 @@ def main():
     # main text buttons
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_buttons))
 
-    # admin commands
+    # admin commands (موجود)
     app.add_handler(CommandHandler("disable_bot", disable_bot))
     app.add_handler(CommandHandler("enable_bot", enable_bot))
     app.add_handler(CommandHandler("blacklist_add", blacklist_add))
@@ -163,10 +212,13 @@ def main():
     app.add_handler(CommandHandler("log", log_user))
     app.add_handler(CommandHandler("refresh_cache", refresh_cache_command))
 
+    # ✅ واتساپ را کنار تلگرام راه‌اندازی و دستورات WA را رجیستر کن
+    register_wa_sync_handlers(app)
+
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] MVCO BOT STARTED")
-    app.run_polling()  # اگر خواستی: drop_pending_updates=False
-    # app.run_polling(drop_pending_updates=False)
 
+    # ⬅️ مهم: آپدیت‌های معوقه (قدیمی) را در استارت دور بریز
+    app.run_polling(drop_pending_updates=True)
 
-if __name__ == "__main__":
+if __name__ == "__main__":+
     main()
