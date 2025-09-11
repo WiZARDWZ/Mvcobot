@@ -247,7 +247,8 @@ def _massage_reply_for_wa(txt: str) -> str:
     new_lines: List[str] = []
     code_line = ""
     for ln in lines:
-        m = _CODE_LINE_MD.match(ln) or (ln.strip().startsWith("کد:") and re.match(r"^\s*کد\s*[:：]\s*(.+)$", ln))
+        # ✅ پایتون: startswith (نه startsWith)
+        m = _CODE_LINE_MD.match(ln) or (ln.strip().startswith("کد:") and re.match(r"^\s*کد\s*[:：]\s*(.+)$", ln))
         if m:
             code_line = (m.group(1) if hasattr(m, "group") else re.sub(r"^\s*کد\s*[:：]\s*", "", ln)).strip()
             continue
@@ -435,7 +436,8 @@ class WAWebBot:
                   (n.getAttribute('data-testid')||'')+' '+
                   (n.getAttribute('title')||'')
                 ).toLowerCase();
-                const nodes = el.querySelectorAll('[data-icon],[aria-label],[data-testid],[title],svg]');
+                // ✅ براکت اضافه حذف شد
+                const nodes = el.querySelectorAll('[data-icon],[aria-label],[data-testid],[title],svg');
                 let hit = '';
                 const re = /(mute|muted|icon-mute|icon-muted|notifications?-?off|bell|bell-slash|silent|silence|بی.?صدا)/i;
                 let cnt = 0;
