@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# WhatsApp Web automation — oldest-unread (>=60s) with lock, typing-aware,
+# WhatsApp Web automation — oldest-unread (>=30s), typing-aware,
 # precise non-code detection, WA-friendly replies (no "کد:"),
 # safe leave (no opening other chats), skip muted chats.
 # + Greedy tokenizer for back-to-back codes
@@ -9,10 +9,8 @@
 # + Strong muted-avoidance (before & after open)
 # + Robust "Mark as unread" (hotkey-first; no row-click), with banner dismiss
 # + Sticky Unread برای پیام‌های غیرکُد
-# + Unconditional Cooldown (WA_REOPEN_COOLDOWN_SEC=420s)
-# + /disable_bot و /enable_bot
-# + working-hours از DB (Asia/Tehran)
-# + 🔒 Chat-lock: تایمر ۶۰ث فقط برای یک چت فعال است و با typing/پیامِ جدید همان چت ریست می‌شود
+# + Unconditional Cooldown (WA_REOPEN_COOLDOWN_SEC=210s)
+# + /disable_bot flag
 
 import asyncio, os, re, json, time, urllib.request, sys, random, hashlib, unicodedata
 from dataclasses import dataclass
@@ -30,22 +28,26 @@ DB_DOWN_MESSAGE = (
 )
 
 def _now(): return time.strftime("%H:%M:%S")
-def _jitter(a=0.25, b=0.6): return random.uniform(a,b)
+def _jitter(a=0.25, b=0.6): return random.uniform(a, b)
 _DEBUG_TOKENS = (os.getenv("WA_DEBUG_TOKENS", "1").strip() == "1")
 def _tokdbg(msg: str):
     if _DEBUG_TOKENS:
         print(f"[{_now()}] TOKDBG | {msg}", flush=True)
 
-# ---- global disable flag (/disable_bot /enable_bot) ----
+# ---- global disable flag (/disable_bot) ----
 isBotEnabled: bool = True
 
 # ===== selectors =====
 CHATLIST_SEL = "[role='grid'][aria-label*='Chat list' i]"
+
+# ✅ فقط ردیف‌ها (row)؛ نه gridcell — تا هر چت یک‌بار دیده شود
 UNREAD_ITEM_XPATH = (
-    "//*[@role='grid' and contains(@aria-label,'Chat list')]//"
-    "span[contains(@aria-label,'unread') or contains(@aria-label,'خوانده نشده')]/"
-    "ancestor::*[@role='row' or @role='gridcell'][1]"
+    "//*[@role='grid' and contains(@aria-label,'Chat list')]"
+    "//*[@role='row']"
+    "[.//span[contains(@aria-label,'unread') or contains(@aria-label,'خوانده نشده')]"
+    " or .//*[contains(@data-testid,'unread') or @data-icon='notification' or contains(@aria-label,'unread')]]"
 )
+
 MUTED_ICON_XPATH = (
     ".//*[@data-icon='muted' or @aria-label='muted' or contains(@aria-label,'muted') "
     "or contains(@aria-label,'بی‌صدا') or contains(@aria-label,'بی‌ صد') "
@@ -250,7 +252,7 @@ def notify_admin(text: str) -> None:
     except Exception:
         pass
 
-# ===== working-hours (DB)
+# ===== working-hours (DB) =====
 _TEHRAN = ZoneInfo("Asia/Tehran")
 
 def _parse_hhmm_safe(val: str, fallback: str) -> dtime:
@@ -279,7 +281,7 @@ def _within_hours_tehran(now_dt: datetime, wh: dict) -> bool:
         return wh["th_start"] <= t < wh["th_end"]
     return wh["wk_start"] <= t < wh["wk_end"]
 
-# ===== title normalize & cooldown helpers =====
+# ===== title normalize =====
 def _norm_title_key(title: str) -> str:
     t = _normalize_bidi_digits_dashes(title or "")
     t2 = []
@@ -297,7 +299,7 @@ class WAConfig:
     headless: bool = False
     slow_mo_ms: int = 100
     idle_scan_interval_sec: float = 10.0
-    min_unread_age_sec: int = 40
+    min_unread_age_sec: int = 30          # ← 30s
     start_url: str = "https://web.whatsapp.com/"
     max_messages_scan: int = 500
     ensure_header_on_send: bool = True
@@ -330,12 +332,10 @@ class WAWebBot:
         self._sticky_unread_titles: Dict[str, float] = {}
         self._cooldown_until: Dict[str, float] = {}
         self._last_typing_at: Dict[str, float] = {}
-        # 🔒 lock برای شمارش ۶۰ث مختص یک چت
-        self._lock: Optional[Dict[str, Any]] = None  # {"key": str, "since": float, "badge": int, "title": str}
         try:
-            self._reopen_cooldown_sec = float(os.getenv("WA_REOPEN_COOLDOWN_SEC", "420") or "420")
+            self._reopen_cooldown_sec = float(os.getenv("WA_REOPEN_COOLDOWN_SEC", "210") or "210")
         except Exception:
-            self._reopen_cooldown_sec = 420.0
+            self._reopen_cooldown_sec = 210.0
         self._hours: Optional[dict] = None
         self._hours_loaded_at: float = 0.0
 
@@ -449,7 +449,7 @@ class WAWebBot:
     async def _is_typing(self, item: Locator) -> bool:
         try:
             hit = await item.evaluate("""(el) => {
-                const get = (n,a)=> (n.getAttribute && (n.getAttribute(a)||'')) || '';
+                const get = (n,a)=> (n.getAttribute && n.getAttribute(a)) || '';
                 const texts = [(el.innerText||el.textContent||'')];
                 el.querySelectorAll('[aria-label],[title],[data-testid]').forEach(n=>{
                     texts.push(get(n,'aria-label'), get(n,'title'), get(n,'data-testid'));
@@ -532,19 +532,42 @@ class WAWebBot:
 
     async def _chat_item_key(self, item: Locator) -> str:
         try:
-            title = await self._guess_item_title(item)
+            meta = await item.evaluate("""(el) => {
+                const fetch = (a) => (el.getAttribute && el.getAttribute(a)) || '';
+                const stable = [];
+                ['data-id','data-jid','data-peer-id','data-list-id','data-testid','id']
+                  .forEach(a=>{ const v=fetch(a); if(v) stable.push(a+':'+v); });
+
+                let title = '';
+                const tnode = el.querySelector("span[dir='auto'][title], span[title], span[dir='auto'], div[dir='auto']");
+                if (tnode) title = (tnode.getAttribute('title') || tnode.innerText || tnode.textContent || '').trim();
+
+                const img = el.querySelector("img[alt]");
+                if (img) stable.push('imgalt:'+ (img.getAttribute('alt') || '').trim());
+
+                return { title, stable: stable.join('|') };
+            }""")
         except Exception:
-            title = ""
-        snippet = ""
+            meta = {"title": "", "stable": ""}
+
         try:
-            snippet = (await item.inner_text()) or ""
+            title_guess = meta.get("title") or await self._guess_item_title(item) or ""
         except Exception:
-            pass
-        snippet = re.sub(r"(در حال تایپ|typing|recording|در حال ضبط|voice message|پیام صوتی)", "", snippet, flags=re.I)
-        snippet = _normalize_bidi_digits_dashes(snippet)[:200]
-        raw = (title + "||" + snippet).strip()
-        digest = hashlib.sha1(raw.encode("utf-8","ignore")).hexdigest()
-        return f"{title}::{digest[:10]}"
+            title_guess = ""
+
+        raw = "||".join([
+            _norm_title_key(title_guess),
+            meta.get("stable",""),
+        ]).strip()
+
+        if not raw:
+            try:
+                raw = (await item.inner_text() or "").strip()
+            except Exception:
+                raw = str(time.time())
+
+        digest = hashlib.sha1(raw.encode("utf-8","ignore")).hexdigest()[:10]
+        return f"{title_guess or '—'}::{digest}"
 
     async def _is_in_chat(self) -> bool:
         page = self._page; assert page
@@ -563,7 +586,8 @@ class WAWebBot:
         try:
             pre = await node.get_attribute("data-pre-plain-text")
             if pre and ("You:" in pre or "You\u200f:" in pre or "You :" in pre):
-                return f"{pre}|{hashlib.sha1((await self._extract_text(node)).encode('utf-8','ignore')).hexdigest()[:10]}"
+                body = await self._extract_text(node)
+                return f"{pre}|{hashlib.sha1(body.encode('utf-8','ignore')).hexdigest()[:10]}"
         except Exception:
             pass
         body = await self._extract_text(node)
@@ -599,7 +623,8 @@ class WAWebBot:
                     els.forEach(e => { out += (e.innerText || e.textContent || ''); });
                     return out.trim();
                 }
-                return (el.innerText || el.textContent || '')?.trim() || '';
+                const v = (el.innerText || el.textContent || '').trim();
+                return v || '';
             }""")
             if txt:
                 return txt
@@ -641,6 +666,35 @@ class WAWebBot:
                 infos.append((marker, text))
         self.dlog(f"_collect_incoming_info_after -> {len(infos)} items")
         return infos
+
+    # ---------- title guess ----------
+    async def _guess_item_title(self, item: Locator) -> str:
+        try:
+            cap = item.locator("xpath=.//span[@dir='auto' or @title][normalize-space()!='']")
+            if await cap.count():
+                t = (await cap.first.inner_text() or "").strip()
+                if t: return t
+        except Exception:
+            pass
+        try:
+            t = await item.evaluate("""(el)=>{
+                const texts = [];
+                const pick = n=>{
+                  const s=(n.innerText||n.textContent||'').trim();
+                  if(!s) return;
+                  if(/^\d{1,4}$/.test(s)) return; // badge
+                  if(/unread/i.test(s)) return;
+                  texts.push(s);
+                };
+                el.querySelectorAll("span[title],span[dir='auto'],div[dir='auto'],h1,h2,h3,h4").forEach(pick);
+                const al = el.getAttribute('aria-label')||'';
+                if(al) texts.push(al.trim());
+                texts.sort((a,b)=> b.length - a.length);
+                return texts[0] || "";
+            }""")
+            return (t or "").strip()
+        except Exception:
+            return ""
 
     # ---------- unread badge info ----------
     async def _unread_badge_info(self, item: Locator) -> Dict[str, Any]:
@@ -703,6 +757,24 @@ class WAWebBot:
         items = await self._find_unread_items()
         self.dlog(f"unread items found: {len(items)}")
 
+        # 🔎 Debug: لیست کول‌داون با نام چت
+        if os.getenv("WA_DEBUG_COOLDOWNS", "1") == "1":
+            dbg = []
+            for it in items:
+                try:
+                    nm = await self._guess_item_title(it)
+                except Exception:
+                    nm = ""
+                if not nm: continue
+                left = max(
+                    int(self._cooldown_until.get(nm, 0) - now_ts),
+                    int(self._cooldown_until.get(_norm_title_key(nm), 0) - now_ts)
+                )
+                if left > 0:
+                    dbg.append(f"{nm}:{left}s")
+            if dbg:
+                self.dlog("active cooldowns: " + " | ".join(dbg))
+
         unread_titles: Set[str] = set()
         for it in items:
             try:
@@ -710,7 +782,7 @@ class WAWebBot:
                 if t: unread_titles.add(t)
             except Exception: pass
 
-        # GC نقشه‌های first_seen / typing برای آیتم‌های حذف‌شده
+        # GC first_seen_unread & typing for vanished rows
         try:
             current_keys = set()
             for it in items:
@@ -720,9 +792,6 @@ class WAWebBot:
                 self._first_seen_unread.pop(k, None)
             for k in [k for k in list(self._last_typing_at.keys()) if k not in current_keys]:
                 self._last_typing_at.pop(k, None)
-            if self._lock and (self._lock.get("key") not in current_keys):
-                self.dlog("lock released (row vanished)")
-                self._lock = None
         except Exception: pass
 
         # GC sticky cache
@@ -735,29 +804,34 @@ class WAWebBot:
         if not items:
             self.log("… no unread chats"); return
 
-        # --- Build candidates (apply cooldown/muted/typing, collect badge)
-        candidates: List[Dict[str, Any]] = []
+        candidates: List[Tuple[Locator, str, float, float, str]] = []
+        now_ts = time.time()
         for it in items:
-            row_title = ""
-            try: row_title = await self._guess_item_title(it)
-            except Exception: pass
+            key = await self._chat_item_key(it)  # ← row-key پایدار
+            try:
+                row_title = await self._guess_item_title(it)
+            except Exception:
+                row_title = ""
 
-            # cooldown: title + normalized + row-key
-            cd_left_any = 0
-            if row_title:
-                for k in (row_title, _norm_title_key(row_title)):
-                    left = int(self._cooldown_until.get(k, 0.0) - now_ts)
-                    if left > cd_left_any:
-                        cd_left_any = left
-            row_key = await self._chat_item_key(it)
-            left_row = int(self._cooldown_until.get(row_key, 0.0) - now_ts)
-            if left_row > cd_left_any:
-                cd_left_any = left_row
-            if cd_left_any > 0:
-                self.dlog(f"skip by cooldown ({cd_left_any}s) row-key")
+            # کول‌داون با row-key
+            cd_until_key = self._cooldown_until.get(key, 0.0)
+            if cd_until_key > now_ts:
+                left = int(cd_until_key - now_ts)
+                self.dlog(f"skip by cooldown ({left}s) row-key: {row_title or '—'}")
                 continue
 
-            # muted skip
+            # کول‌داون با عنوان
+            left_title = 0.0
+            if row_title:
+                for k2 in (row_title, _norm_title_key(row_title)):
+                    v = self._cooldown_until.get(k2, 0.0) - now_ts
+                    if v > left_title:
+                        left_title = v
+            if left_title > 0:
+                self.dlog(f"skip by cooldown ({int(left_title)}s) title: {row_title or '—'}")
+                continue
+
+            # چت‌های میوت را باز نکن
             if row_title and row_title in self._muted_titles_cache:
                 self.dlog(f"skip (muted cache) row: {row_title}")
                 continue
@@ -768,100 +842,87 @@ class WAWebBot:
                     continue
             except Exception: pass
 
-            # unread badge باید عددی باشد
-            badge = await self._unread_badge_info(it)
-            if badge.get("count", 0) <= 0:
-                self.dlog(f"skip unread (dot-only) row: {row_title or '—'}")
-                continue
+            # فقط badge عددی
+            try:
+                badge = await self._unread_badge_info(it)
+                if badge.get("count", 0) <= 0:
+                    self.dlog(f"skip unread (dot-only) row: {row_title or '—'}")
+                    continue
+            except Exception as e:
+                self.dlog(f"badge check failed: {e!r}")
 
-            key = row_key
+            # اگر در حال تایپ بود -> ریست سن‌سنج و رد شو
+            try:
+                if await self._is_typing(it):
+                    now_ts2 = time.time()
+                    self._first_seen_unread[key] = now_ts2
+                    self._last_typing_at[key] = now_ts2
+                    self.dlog("typing detected -> age timer reset to now")
+                    continue
+            except Exception:
+                pass
+
             if key not in self._first_seen_unread:
                 self._first_seen_unread[key] = now_ts
             seen_ts = self._first_seen_unread.get(key, now_ts)
-
-            is_typing = await self._is_typing(it)
+            eff_seen = max(seen_ts, self._last_typing_at.get(key, 0.0))
 
             try:
                 box = await it.bounding_box(); y = box["y"] if box else 0.0
             except Exception:
                 y = 0.0
+            if key in self._processing: continue
+            candidates.append((it, key, eff_seen, y, row_title))
 
-            candidates.append({
-                "item": it,
-                "key": key,
-                "title": row_title,
-                "seen": seen_ts,
-                "badge": int(badge.get("count", 0) or 0),
-                "typing": bool(is_typing),
-                "y": y
-            })
-
-        if not candidates:
-            self.dlog("… unread exists but (typing/in-progress or muted)")
+        # واجد شرایط: سن از baseline موثر
+        eligible = [(it,k,seen,y,t) for (it,k,seen,y,t) in candidates if (now_ts - seen) >= self.cfg.min_unread_age_sec]
+        if not eligible:
+            if candidates:
+                rem = min(max(0, self.cfg.min_unread_age_sec - (now_ts - c[2])) for c in candidates)
+                self.dlog(f"… unread exists but waiting for {int(rem)}s age (min={self.cfg.min_unread_age_sec}s)")
+            else:
+                self.dlog("… unread exists but (typing/in-progress or muted)")
             return
 
-        # ---------- 🔒 LOCKED aging logic ----------
-        if not self._lock:
-            candidates.sort(key=lambda c: (c["seen"], c["y"]))
-            chosen = candidates[0]
-            self._lock = {
-                "key": chosen["key"],
-                "since": now_ts,                # شمارش از الان
-                "badge": chosen["badge"],       # برای تشخیص پیام جدید
-                "title": chosen["title"] or ""
-            }
-            self.dlog(f"lock set -> {self._lock['title'] or '—'} (badge={self._lock['badge']})")
-            wait_left = int(self.cfg.min_unread_age_sec - (time.time() - self._lock["since"]))
-            self.dlog(f"… unread exists but waiting for {max(0, wait_left)}s age (min={self.cfg.min_unread_age_sec}s)")
-            return
+        eligible.sort(key=lambda x: (x[2], x[3]))
+        item, key, _, _, row_title = eligible[0]
 
-        # اگر قفل داریم: همان ردیف را پیدا کن
-        lock_key = self._lock["key"]
-        locked_row = None
-        for c in candidates:
-            if c["key"] == lock_key:
-                locked_row = c
-                break
+        # گارد نهایی قبل از بازکردن: اگر الآن typing شد -> defer
+        try:
+            if await self._is_typing(item):
+                now_ts3 = time.time()
+                self._first_seen_unread[key] = now_ts3
+                self._last_typing_at[key] = now_ts3
+                self.dlog("typing detected just before open -> defer")
+                return
+        except Exception:
+            pass
 
-        # اگر قفل مربوطه دیگر کاندید نیست، قفل را رها کن
-        if not locked_row:
-            self.dlog("lock target not in candidates anymore -> relock")
-            self._lock = None
-            return  # دور بعد قفل جدید گرفته می‌شود
-
-        # اگر همان چت تایپینگ شد یا badge بیشتر شد -> قفل آزاد
-        if locked_row["typing"] or (locked_row["badge"] > int(self._lock["badge"])):
-            self.dlog("lock reset (typing or new message on locked chat)")
-            self._last_typing_at[locked_row["key"]] = now_ts
-            self._first_seen_unread[locked_row["key"]] = now_ts
-            self._lock = None
-            return
-
-        # اگر هنوز ۶۰ث کامل نشده
-        age = time.time() - float(self._lock["since"])
-        if age < self.cfg.min_unread_age_sec:
-            wait_left = int(self.cfg.min_unread_age_sec - age)
-            self.dlog(f"… locked '{self._lock['title'] or '—'}' waiting {wait_left}s")
-            return
-
-        # ✅ وقت بازکردن همان ردیف قفل‌شده است
-        item = locked_row["item"]
-        row_title_guess = locked_row["title"]
-        key = locked_row["key"]
-
-        if key in self._processing:
-            return
+        if key in self._processing: return
         self._processing.add(key)
         try:
-            self.dlog(f"opening chat item, title guess: {row_title_guess or '—'}")
+            self.dlog(f"opening chat item, title guess: {row_title or '—'}")
             if not await self._open_chat_item(item):
                 self.dlog("open chat failed"); return
 
             header_title = await self._get_header_title()
             self.dlog(f"active header: {header_title or '—'}")
-            chat_id_key = header_title or row_title_guess or key
+            chat_id_key = header_title or row_title or key
 
-            # بعد از باز کردن: اگر میوت بود، خارج شو
+            # گارد کول‌داون بعد از باز شدن
+            now_ts4 = time.time()
+            cd_left_after_open = max(
+                int(self._cooldown_until.get(header_title, 0) - now_ts4),
+                int(self._cooldown_until.get(_norm_title_key(header_title), 0) - now_ts4),
+                int(self._cooldown_until.get(key, 0) - now_ts4),
+            )
+            if cd_left_after_open > 0:
+                self.dlog(f"opened but on cooldown ({cd_left_after_open}s) -> leave without processing: {header_title or row_title or '—'}")
+                await asyncio.sleep(_jitter(0.2, 0.35))
+                await self._leave_to_sidebar(force_hard=True)
+                return
+
+            # after-open muted check
             if await self._is_current_chat_muted():
                 self.dlog("current chat is muted -> skip responding & leave")
                 if header_title: self._muted_titles_cache.add(header_title)
@@ -869,10 +930,9 @@ class WAWebBot:
                 await self._leave_to_sidebar(force_hard=True)
                 try: self._first_seen_unread.pop(key, None)
                 except Exception: pass
-                self._lock = None
                 return
 
-            sticky_preopen = bool(header_title and (header_title in self._sticky_unread_titles or row_title_guess in self._sticky_unread_titles))
+            sticky_preopen = bool(header_title and (header_title in self._sticky_unread_titles or row_title in self._sticky_unread_titles))
 
             last_out_idx = await self._get_last_outgoing_index()
             self.dlog(f"last outgoing index: {last_out_idx}")
@@ -886,7 +946,6 @@ class WAWebBot:
 
             if not infos:
                 await self._leave_to_sidebar(force_hard=True)
-                self._lock = None
                 return
 
             last_marker = self._last_incoming_marker_by_chat.get(chat_id_key, "")
@@ -899,38 +958,24 @@ class WAWebBot:
             fresh_infos = infos[start_idx:]
             msgs = [t for (_,t) in fresh_infos]
 
-            # ---- /disable_bot /enable_bot ----
+            # ---- /disable_bot ----
             global isBotEnabled
-            toggled = False
             for _mm in reversed(msgs):
-                mlow = _mm.strip().lower()
-                if mlow.startswith('/disable_bot'):
+                if _mm.strip().lower().startswith('/disable_bot'):
                     isBotEnabled = False
                     self.dlog('bot disabled via /disable_bot')
-                    toggled = True
-                    break
-                if mlow.startswith('/enable_bot'):
-                    isBotEnabled = True
-                    self.dlog('bot enabled via /enable_bot')
-                    toggled = True
-                    break
-            if toggled:
-                await asyncio.sleep(0.1)
-                await self._leave_to_sidebar(force_hard=True)
-                self._lock = None
-                return
-
+                    await asyncio.sleep(0.1)
+                    await self._leave_to_sidebar(force_hard=True)
+                    return
             if not isBotEnabled:
                 self.dlog('bot is disabled -> log only; no auto-reply')
                 await asyncio.sleep(0.1)
                 await self._leave_to_sidebar(force_hard=True)
-                self._lock = None
                 return
 
             self.dlog(f"fresh messages after HWM: {len(msgs)} (start_idx={start_idx})")
             if not msgs:
                 await self._leave_to_sidebar(force_hard=True)
-                self._lock = None
                 return
 
             tokens_all: List[dict] = []
@@ -995,14 +1040,13 @@ class WAWebBot:
                     ts_until = time.time() + self._reopen_cooldown_sec
                     self._cooldown_until[header_title] = ts_until
                     self._cooldown_until[_norm_title_key(header_title)] = ts_until
-                    self._cooldown_until[key] = ts_until  # row-key
+                    self._cooldown_until[key] = ts_until              # ← row-key هم ثبت می‌شود
                     self.dlog(f"cooldown set for '{header_title}' ({int(self._reopen_cooldown_sec)}s)")
                 preview = (msgs[-1] if msgs else "")[:200].replace("<","‹").replace(">","›")
                 notify_admin("🔔 <b>پیام غیرکُد</b> در چت «<code>{}</code>»\nآخرین پیام: <i>{}</i>".format(
                     header_title or "بدون‌عنوان", preview
                 ))
                 await self._post_unread_hard_leave()
-                self._lock = None
                 return
 
             if attempted_reply and header_title:
@@ -1012,10 +1056,9 @@ class WAWebBot:
                 ts_until = time.time() + self._reopen_cooldown_sec
                 self._cooldown_until[header_title] = ts_until
                 self._cooldown_until[_norm_title_key(header_title)] = ts_until
-                self._cooldown_until[key] = ts_until  # row-key
+                self._cooldown_until[key] = ts_until                  # ← row-key هم ثبت می‌شود
                 self.dlog(f"cooldown set for '{header_title}' ({int(self._reopen_cooldown_sec)}s)")
                 await self._post_unread_hard_leave()
-                self._lock = None
                 return
 
             if sent_any and sticky_preopen and header_title and not attempted_reply:
@@ -1033,27 +1076,30 @@ class WAWebBot:
 
             await asyncio.sleep(_jitter(0.8, 1.2))
             await self._leave_to_sidebar(force_hard=True)
-            self._lock = None
         finally:
             self._processing.discard(key)
 
     # ---------- unread / open ----------
     async def _find_unread_items(self) -> List[Locator]:
         page = self._page; assert page
-        items = page.locator(f"xpath={UNREAD_ITEM_XPATH}")
-        cnt = await items.count()
-        return [items.nth(i) for i in range(cnt)]
+        rows = page.locator(f"xpath={UNREAD_ITEM_XPATH}")
+        cnt = await rows.count()
+        raw_items = [rows.nth(i) for i in range(cnt)]
 
-    async def _guess_item_title(self, item: Locator) -> str:
-        try:
-            cap = item.locator("xpath=.//span[@dir='auto' or @title][normalize-space()!='']")
-            if await cap.count():
-                t = (await cap.first.inner_text() or "").strip()
-                if t:
-                    return t
-        except Exception:
-            pass
-        return ""
+        # ✅ dedup by stable row-key (title+digest)
+        unique: Dict[str, Locator] = {}
+        for it in raw_items:
+            try:
+                k = await self._chat_item_key(it)
+            except Exception:
+                k = f"__fallback_{len(unique)}_{int(time.time()*1000)}"
+            if k not in unique:
+                unique[k] = it
+
+        if cnt and len(unique) != cnt:
+            self.dlog(f"dedup unread list: {cnt}->{len(unique)} by row-key")
+
+        return list(unique.values())
 
     async def _get_header_title(self) -> str:
         page = self._page; assert page
@@ -1097,27 +1143,24 @@ class WAWebBot:
             try:
                 n = await page.locator("[data-pre-plain-text]").count()
                 if n > 0: return True
-            except Exception:
-                pass
+            except Exception: pass
             tb,_ = await self._find_composer_candidate()
             return (await tb.count()) > 0
-
         for attempt in range(6):
             try:
                 await item.scroll_into_view_if_needed()
                 if attempt in (0,1):
                     await item.click(force=(attempt==1))
-                elif attempt == 2:
+                elif attempt==2:
                     await item.dblclick()
-                elif attempt == 3:
+                elif attempt==3:
                     box = await item.bounding_box()
                     if box:
                         await page.mouse.click(box["x"]+box["width"]/2, box["y"]+box["height"]/2)
                     else:
                         await item.click()
                 else:
-                    await item.focus()
-                    await page.keyboard.press("Enter")
+                    await item.focus(); await page.keyboard.press("Enter")
                 ok = await opened_ok()
                 self.dlog(f"open attempt {attempt} -> {'OK' if ok else 'NO'}")
                 if ok: return True
@@ -1147,8 +1190,7 @@ class WAWebBot:
         try:
             vw = page.viewport_size or {"width":1200,"height":800}
             await page.mouse.click(vw["width"]*0.72, vw["height"]*0.92)
-        except Exception:
-            pass
+        except Exception: pass
         loc = page.locator("div[contenteditable='true'][role='textbox']")
         return loc.first, "fallback: any [contenteditable][role=textbox]"
 
@@ -1180,8 +1222,7 @@ class WAWebBot:
                 if (cur or "").strip() != (expected_header_title or "").strip():
                     self.dlog(f"header changed; expected={expected_header_title!r} got={cur!r}")
                     return False
-            except Exception:
-                pass
+            except Exception: pass
 
         tb, sel_used = await self._find_composer_candidate()
         if not await tb.count(): self.dlog("composer not found"); return False
@@ -1191,8 +1232,7 @@ class WAWebBot:
         except Exception:
             try:
                 await page.keyboard.down("Meta"); await page.keyboard.press("KeyA"); await page.keyboard.up("Meta")
-            except Exception:
-                pass
+            except Exception: pass
         await page.keyboard.press("Backspace")
         self.dlog(f"composer ready via: {sel_used}")
 
@@ -1241,8 +1281,7 @@ class WAWebBot:
                     if after > before:
                         self.dlog(f"sent bubble confirmed after click {before}->{after}")
                         return True
-            else:
-                self.dlog("SEND button not found")
+            else: self.dlog("SEND button not found")
         except Exception as e:
             self.dlog(f"click SEND failed: {e!r}")
         self.dlog("send NOT confirmed"); return False
@@ -1422,7 +1461,6 @@ class WAWebBot:
         try:
             for _ in range(3):
                 await page.keyboard.press("Escape")
-                await asyncio.sleep(0.12)
             self.dlog("left -> pressed Escape")
         except Exception:
             pass
