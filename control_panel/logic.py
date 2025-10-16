@@ -56,6 +56,12 @@ COMMANDS_KEY = "panel_commands_v1"
 PLATFORMS_KEY = "panel_platforms_v1"
 CACHE_KEY = "inventory_cache_last_refresh"
 TIMEZONE_KEY = "working_timezone"
+LUNCH_START_KEY = "lunch_start"
+LUNCH_END_KEY = "lunch_end"
+QUERY_LIMIT_KEY = "query_limit"
+DELIVERY_BEFORE_KEY = "delivery_before"
+DELIVERY_AFTER_KEY = "delivery_after"
+CHANGEOVER_KEY = "changeover_hour"
 
 
 class ControlPanelError(Exception):
@@ -77,6 +83,28 @@ class Metrics:
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _normalize_time(value: Optional[str], field_name: str) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    try:
+        datetime.strptime(text, "%H:%M")
+    except Exception:
+        raise ControlPanelError(f"زمان {field_name} باید در قالب HH:MM باشد.")
+    return text
+
+
+def _safe_int(value: Optional[str]) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return None
 
 
 def _load_json_setting(key: str, default: Any) -> Any:
@@ -151,6 +179,8 @@ def _aggregate_metrics_from_db() -> Metrics:
         "lastUpdatedISO": get_setting(CACHE_KEY) or _now_iso(),
         "usingFallback": fallback,
     }
+    status["dataSource"] = "fallback" if fallback else "live"
+    status["usingFallback"] = fallback
     return Metrics(totals=totals, monthly=monthly, cache=cache_info, status=status)
 
 
@@ -188,6 +218,26 @@ def _build_status_snapshot() -> Dict[str, Any]:
 
     timezone_value = get_setting(TIMEZONE_KEY) or "Asia/Tehran"
 
+    lunch_start = get_setting(LUNCH_START_KEY) or ""
+    lunch_end = get_setting(LUNCH_END_KEY) or ""
+    query_limit = _safe_int(get_setting(QUERY_LIMIT_KEY))
+    delivery_before = get_setting(DELIVERY_BEFORE_KEY) or ""
+    delivery_after = get_setting(DELIVERY_AFTER_KEY) or ""
+    changeover_hour = get_setting(CHANGEOVER_KEY) or ""
+
+    operations = {
+        "lunchBreak": {
+            "start": lunch_start or None,
+            "end": lunch_end or None,
+        },
+        "queryLimit": query_limit,
+        "delivery": {
+            "before": delivery_before,
+            "after": delivery_after,
+            "changeover": changeover_hour or None,
+        },
+    }
+
     return {
         "active": enabled,
         "message": message,
@@ -196,6 +246,8 @@ def _build_status_snapshot() -> Dict[str, Any]:
             "weekly": weekly,
         },
         "platforms": platforms,
+        "operations": operations,
+        "dataSource": "live",
     }
 
 
@@ -355,45 +407,91 @@ def remove_block_item(item_id: str) -> Dict[str, Any]:
 
 def get_settings() -> Dict[str, Any]:
     status = _build_status_snapshot()
+    operations = status.get("operations", {})
     return {
         "timezone": status["workingHours"]["timezone"],
         "weekly": status["workingHours"]["weekly"],
         "platforms": status["platforms"],
+        "lunchBreak": operations.get("lunchBreak", {"start": None, "end": None}),
+        "queryLimit": operations.get("queryLimit"),
+        "deliveryInfo": operations.get(
+            "delivery",
+            {"before": "", "after": "", "changeover": None},
+        ),
+        "dataSource": status.get("dataSource", "live"),
     }
 
 
 def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
-    timezone_value = (payload.get("timezone") or "Asia/Tehran").strip()
-    weekly = payload.get("weekly") or []
-    if not isinstance(weekly, list):
-        raise ControlPanelError("ساختار ساعات کاری نامعتبر است.")
+    timezone_value = payload.get("timezone")
+    if timezone_value is not None:
+        timezone_clean = timezone_value.strip() or "Asia/Tehran"
+        set_setting(TIMEZONE_KEY, timezone_clean)
 
-    set_setting(TIMEZONE_KEY, timezone_value)
+    weekly = payload.get("weekly")
+    if weekly is not None:
+        if not isinstance(weekly, list):
+            raise ControlPanelError("ساختار ساعات کاری نامعتبر است.")
 
-    weekly_by_day = {item.get("day"): item for item in weekly if isinstance(item, dict)}
+        weekly_by_day = {item.get("day"): item for item in weekly if isinstance(item, dict)}
 
-    reference_days = [6, 0, 1, 2, 3]  # روزهای کاری معمول
-    general = next((weekly_by_day.get(day) for day in reference_days if weekly_by_day.get(day)), None)
-    thursday = weekly_by_day.get(4)
-    friday = weekly_by_day.get(5)
+        reference_days = [6, 0, 1, 2, 3]  # روزهای کاری معمول
+        general = next((weekly_by_day.get(day) for day in reference_days if weekly_by_day.get(day)), None)
+        thursday = weekly_by_day.get(4)
+        friday = weekly_by_day.get(5)
 
-    if general:
-        open_time = (general.get("open") or "08:00").strip()
-        close_time = (general.get("close") or "18:00").strip()
-        set_setting("working_start", open_time or "08:00")
-        set_setting("working_end", close_time or "18:00")
+        if general:
+            open_time = (general.get("open") or "08:00").strip()
+            close_time = (general.get("close") or "18:00").strip()
+            set_setting("working_start", open_time or "08:00")
+            set_setting("working_end", close_time or "18:00")
 
-    if thursday:
-        set_setting("thursday_start", (thursday.get("open") or "").strip())
-        set_setting("thursday_end", (thursday.get("close") or "").strip())
+        if thursday:
+            set_setting("thursday_start", (thursday.get("open") or "").strip())
+            set_setting("thursday_end", (thursday.get("close") or "").strip())
 
-    if friday:
-        is_closed = not (friday.get("open") and friday.get("close"))
-        set_setting("disable_friday", "true" if is_closed else "false")
+        if friday:
+            is_closed = not (friday.get("open") and friday.get("close"))
+            set_setting("disable_friday", "true" if is_closed else "false")
 
     platforms = payload.get("platforms")
     if isinstance(platforms, dict):
         _save_json_setting(PLATFORMS_KEY, platforms)
+
+    if "lunchBreak" in payload:
+        lunch_break = payload.get("lunchBreak") or {}
+        if not isinstance(lunch_break, dict):
+            raise ControlPanelError("ساختار بازه ناهار نامعتبر است.")
+        start = _normalize_time(lunch_break.get("start"), "شروع ناهار")
+        end = _normalize_time(lunch_break.get("end"), "پایان ناهار")
+        set_setting(LUNCH_START_KEY, start)
+        set_setting(LUNCH_END_KEY, end)
+
+    if "queryLimit" in payload:
+        limit_value = payload.get("queryLimit")
+        if limit_value in (None, ""):
+            set_setting(QUERY_LIMIT_KEY, "")
+        else:
+            try:
+                limit_int = int(str(limit_value).strip())
+            except Exception:
+                raise ControlPanelError("محدودیت استعلام باید عددی باشد.")
+            if limit_int < 0:
+                raise ControlPanelError("محدودیت استعلام نمی‌تواند منفی باشد.")
+            set_setting(QUERY_LIMIT_KEY, str(limit_int))
+
+    if "deliveryInfo" in payload:
+        delivery_info = payload.get("deliveryInfo") or {}
+        if not isinstance(delivery_info, dict):
+            raise ControlPanelError("ساختار تنظیمات تحویل نامعتبر است.")
+        before_text = str(delivery_info.get("before") or "").strip()
+        after_text = str(delivery_info.get("after") or "").strip()
+        changeover_value = _normalize_time(
+            delivery_info.get("changeover"), "ساعت تغییر متن"
+        )
+        set_setting(DELIVERY_BEFORE_KEY, before_text)
+        set_setting(DELIVERY_AFTER_KEY, after_text)
+        set_setting(CHANGEOVER_KEY, changeover_value)
 
     return get_settings()
 

@@ -8,6 +8,7 @@ import { renderToast } from './ui/components.js';
 const viewContainer = document.querySelector('[data-router-view]');
 const navLinks = Array.from(document.querySelectorAll('[data-route-link]'));
 const refreshButton = document.querySelector('[data-action="refresh"]');
+const fallbackBanner = document.querySelector('[data-role="fallback-alert"]');
 
 const routes = {
   '#/dashboard': () => import('./ui/dashboard.js'),
@@ -99,11 +100,17 @@ refreshButton?.addEventListener('click', () => {
 
 let fallbackToastVisible = false;
 
-window.addEventListener(API_EVENTS.FALLBACK, () => {
+window.addEventListener(API_EVENTS.FALLBACK, (event) => {
+  const message =
+    event?.detail?.message || 'اتصال به سرور برقرار نشد؛ داده‌های آزمایشی نمایش داده می‌شوند.';
+  if (fallbackBanner) {
+    fallbackBanner.textContent = message;
+    fallbackBanner.hidden = false;
+  }
   if (fallbackToastVisible) return;
   fallbackToastVisible = true;
   renderToast({
-    message: 'اتصال به سرور برقرار نشد؛ داده‌های آزمایشی نمایش داده می‌شوند.',
+    message,
     type: 'warning',
   });
   window.setTimeout(() => {
