@@ -6,7 +6,6 @@ import mimetypes
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
-from socketserver import ThreadingMixIn
 from typing import Any, Callable, Dict, Optional, Tuple
 from urllib.parse import urlparse
 from pathlib import Path
@@ -203,7 +202,16 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
     # endregion
 
 
-class ThreadedHTTPServer(ThreadingMixIn, _ThreadingHTTPServer):
+class ThreadedHTTPServer(_ThreadingHTTPServer):
+    """Threading HTTP server with daemon threads enabled.
+
+    Python's :class:`http.server.ThreadingHTTPServer` already mixes in
+    :class:`socketserver.ThreadingMixIn`. Subclassing it alongside the mixin on
+    some interpreters (notably CPython 3.8 on Windows) can raise a Method
+    Resolution Order (MRO) error. We only need to override ``daemon_threads``
+    so inheriting directly from ``ThreadingHTTPServer`` keeps compatibility
+    while preserving the threaded behaviour."""
+
     daemon_threads = True
 
 
