@@ -1,0 +1,392 @@
+/**
+ * API layer for the Mvcobot control panel.
+ * Provides a mock data store that can be swapped with the real backend by
+ * configuring window.APP_CONFIG.API_BASE_URL.
+ */
+
+const defaultConfig = {
+  API_BASE_URL: '',
+  API_KEY: '',
+  TELEGRAM_ENABLED: true,
+  WHATSAPP_ENABLED: true,
+};
+
+const DAYS_IN_WEEK = 7;
+
+const seededRandom = (() => {
+  let seed = 42;
+  return () => {
+    const x = Math.sin(seed++) * 10000;
+    return x - Math.floor(x);
+  };
+})();
+
+function getLastMonths(count = 12) {
+  const now = new Date();
+  const months = [];
+  for (let i = count - 1; i >= 0; i -= 1) {
+    const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const label = new Intl.DateTimeFormat('fa-IR', { month: 'short' }).format(date);
+    months.push({
+      month: label,
+      key: `${date.getFullYear()}-${date.getMonth() + 1}`.padStart(2, '0'),
+    });
+  }
+  return months;
+}
+
+const monthlyData = getLastMonths(12).map(({ month }) => {
+  const telegram = Math.floor(seededRandom() * 120 + 30);
+  const whatsapp = Math.floor(seededRandom() * 180 + 45);
+  return {
+    month,
+    telegram,
+    whatsapp,
+    all: telegram + whatsapp,
+  };
+});
+
+export const API_EVENTS = {
+  FALLBACK: 'mvcobot:api-fallback',
+};
+
+const mockStore = {
+  metrics: {
+    totals: monthlyData.reduce(
+      (acc, item) => ({
+        telegram: acc.telegram + item.telegram,
+        whatsapp: acc.whatsapp + item.whatsapp,
+        all: acc.all + item.all,
+      }),
+      { telegram: 0, whatsapp: 0, all: 0 }
+    ),
+    monthly: monthlyData,
+    cache: {
+      lastUpdatedISO: new Date(Date.now() - 1000 * 60 * 32).toISOString(),
+    },
+    status: {
+      active: true,
+      workingHours: {
+        timezone: 'Asia/Tehran',
+        weekly: Array.from({ length: DAYS_IN_WEEK }).map((_, index) => ({
+          day: index,
+          open: index === 5 ? null : '09:00',
+          close: index === 5 ? null : '18:00',
+        })),
+      },
+      message: 'ربات فعال و آماده پاسخ‌گویی است.',
+    },
+  },
+  commands: [
+    {
+      id: 'cmd-1',
+      command: '/start',
+      description: 'آغاز مکالمه با کاربر و ارسال راهنما',
+      enabled: true,
+      lastUsedISO: new Date(Date.now() - 1000 * 60 * 60 * 6).toISOString(),
+    },
+    {
+      id: 'cmd-2',
+      command: '/pricing',
+      description: 'ارائه پلن‌های قیمت به کاربر',
+      enabled: true,
+      lastUsedISO: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
+    },
+    {
+      id: 'cmd-3',
+      command: '/support',
+      description: 'اتصال کاربر به پشتیبانی انسانی',
+      enabled: false,
+      lastUsedISO: new Date(Date.now() - 1000 * 60 * 60 * 24 * 2).toISOString(),
+    },
+  ],
+  blocklist: [
+    {
+      id: 'blk-1',
+      platform: 'telegram',
+      phoneOrUser: '@spam_account',
+      reason: 'ارسال پیام تبلیغاتی',
+      createdAtISO: new Date(Date.now() - 1000 * 60 * 60 * 24 * 5).toISOString(),
+    },
+    {
+      id: 'blk-2',
+      platform: 'whatsapp',
+      phoneOrUser: '+982112345678',
+      reason: 'گزارش تخلف کاربران',
+      createdAtISO: new Date(Date.now() - 1000 * 60 * 60 * 24 * 12).toISOString(),
+    },
+  ],
+  settings: {
+    timezone: 'Asia/Tehran',
+    weekly: Array.from({ length: DAYS_IN_WEEK }).map((_, index) => ({
+      day: index,
+      open: index === 5 ? null : '09:00',
+      close: index === 5 ? null : '18:00',
+    })),
+    platforms: {
+      telegram: defaultConfig.TELEGRAM_ENABLED,
+      whatsapp: defaultConfig.WHATSAPP_ENABLED,
+    },
+  },
+};
+
+const delay = (ms = 360) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function getConfig() {
+  return { ...defaultConfig, ...(window.APP_CONFIG ?? {}) };
+}
+
+function isMockMode() {
+  const { API_BASE_URL } = getConfig();
+  return !API_BASE_URL;
+}
+
+function withAuthHeaders(headers = {}) {
+  const { API_KEY } = getConfig();
+  if (API_KEY) {
+    return {
+      ...headers,
+      Authorization: `Bearer ${API_KEY}`,
+    };
+  }
+  return headers;
+}
+
+async function request(path, { method = 'GET', body } = {}) {
+  const { API_BASE_URL } = getConfig();
+  const url = `${API_BASE_URL}${path}`;
+  const options = {
+    method,
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: body ? JSON.stringify(body) : undefined,
+  };
+  const response = await fetch(url, options);
+  const text = await response.text();
+  let data = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch (error) {
+      data = text;
+    }
+  }
+  if (!response.ok) {
+    const message = data?.message || response.statusText || 'خطای ناشناخته';
+    throw new Error(message);
+  }
+  return data;
+}
+
+function clone(data) {
+  if (typeof structuredClone === 'function') {
+    return structuredClone(data);
+  }
+  return JSON.parse(JSON.stringify(data));
+}
+
+function emitFallback(detail) {
+  try {
+    window.dispatchEvent(new CustomEvent(API_EVENTS.FALLBACK, { detail }));
+  } catch (error) {
+    // ignored: running outside the browser
+  }
+}
+
+async function runMock(handler) {
+  await delay();
+  const result = handler();
+  return clone(result);
+}
+
+async function runWithFallback(method, requestFn, mockFn) {
+  if (isMockMode()) {
+    return runMock(mockFn);
+  }
+
+  try {
+    return await requestFn();
+  } catch (error) {
+    console.warn(`API request failed for ${method}. Falling back to mock data.`, error);
+    emitFallback({ method, error });
+    return runMock(mockFn);
+  }
+}
+
+function ensureId(prefix) {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return `${prefix}-${Math.random().toString(16).slice(2)}-${Date.now()}`;
+}
+
+export const api = {
+  async getMetrics() {
+    return runWithFallback(
+      'getMetrics',
+      () => request('/api/v1/metrics'),
+      () => mockStore.metrics
+    );
+  },
+
+  async getCommands() {
+    return runWithFallback(
+      'getCommands',
+      () => request('/api/v1/commands'),
+      () => mockStore.commands
+    );
+  },
+
+  async createCommand(payload) {
+    const mockHandler = () => {
+      const item = {
+        id: ensureId('cmd'),
+        lastUsedISO: null,
+        ...payload,
+      };
+      mockStore.commands.unshift(item);
+      return item;
+    };
+
+    return runWithFallback(
+      'createCommand',
+      () => request('/api/v1/commands', { method: 'POST', body: payload }),
+      mockHandler
+    );
+  },
+
+  async updateCommand(id, payload) {
+    const mockHandler = () => {
+      const index = mockStore.commands.findIndex((item) => item.id === id);
+      if (index === -1) throw new Error('دستور یافت نشد');
+      mockStore.commands[index] = { ...mockStore.commands[index], ...payload };
+      return mockStore.commands[index];
+    };
+
+    return runWithFallback(
+      'updateCommand',
+      () => request(`/api/v1/commands/${id}`, { method: 'PUT', body: payload }),
+      mockHandler
+    );
+  },
+
+  async deleteCommand(id) {
+    const mockHandler = () => {
+      mockStore.commands = mockStore.commands.filter((item) => item.id !== id);
+      return { success: true };
+    };
+
+    return runWithFallback(
+      'deleteCommand',
+      () => request(`/api/v1/commands/${id}`, { method: 'DELETE' }),
+      mockHandler
+    );
+  },
+
+  async getBlocklist() {
+    return runWithFallback(
+      'getBlocklist',
+      () => request('/api/v1/blocklist'),
+      () => mockStore.blocklist
+    );
+  },
+
+  async addBlockItem(payload) {
+    const mockHandler = () => {
+      const item = {
+        id: ensureId('blk'),
+        createdAtISO: new Date().toISOString(),
+        ...payload,
+      };
+      mockStore.blocklist.unshift(item);
+      return item;
+    };
+
+    return runWithFallback(
+      'addBlockItem',
+      () => request('/api/v1/blocklist', { method: 'POST', body: payload }),
+      mockHandler
+    );
+  },
+
+  async removeBlockItem(id) {
+    const mockHandler = () => {
+      mockStore.blocklist = mockStore.blocklist.filter((item) => item.id !== id);
+      return { success: true };
+    };
+
+    return runWithFallback(
+      'removeBlockItem',
+      () => request(`/api/v1/blocklist/${id}`, { method: 'DELETE' }),
+      mockHandler
+    );
+  },
+
+  async getSettings() {
+    return runWithFallback(
+      'getSettings',
+      () => request('/api/v1/settings'),
+      () => mockStore.settings
+    );
+  },
+
+  async updateSettings(payload) {
+    const mockHandler = () => {
+      mockStore.settings = {
+        ...mockStore.settings,
+        ...payload,
+      };
+      if (payload.platforms) {
+        mockStore.settings.platforms = {
+          ...mockStore.settings.platforms,
+          ...payload.platforms,
+        };
+      }
+      if (payload.weekly) {
+        mockStore.settings.weekly = payload.weekly.map((item) => ({ ...item }));
+      }
+      if (payload.weekly || payload.timezone) {
+        mockStore.metrics.status.workingHours = {
+          timezone: payload.timezone ?? mockStore.settings.timezone,
+          weekly: (payload.weekly ?? mockStore.settings.weekly).map((item) => ({ ...item })),
+        };
+      }
+      return mockStore.settings;
+    };
+
+    return runWithFallback(
+      'updateSettings',
+      () => request('/api/v1/settings', { method: 'PUT', body: payload }),
+      mockHandler
+    );
+  },
+
+  async toggleBot(active) {
+    const mockHandler = () => {
+      mockStore.metrics.status.active = active;
+      mockStore.metrics.status.message = active
+        ? 'ربات فعال و آماده پاسخ‌گویی است.'
+        : 'ربات غیرفعال است.';
+      return mockStore.metrics.status;
+    };
+
+    return runWithFallback(
+      'toggleBot',
+      () => request('/api/v1/bot/toggle', { method: 'POST', body: { active } }),
+      mockHandler
+    );
+  },
+
+  async invalidateCache() {
+    const mockHandler = () => {
+      const now = new Date().toISOString();
+      mockStore.metrics.cache.lastUpdatedISO = now;
+      return { lastUpdatedISO: now };
+    };
+
+    return runWithFallback(
+      'invalidateCache',
+      () => request('/api/v1/cache/invalidate', { method: 'POST' }),
+      mockHandler
+    );
+  },
+};

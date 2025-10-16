@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mvcobot Control Panel</title>
+    <link rel="stylesheet" href="assets/css/styles.css" />
+    <link
+      rel="preconnect"
+      href="https://fonts.googleapis.com"
+      crossorigin
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js" defer></script>
+    <script>
+      window.APP_CONFIG = {
+        API_BASE_URL: "",
+        API_KEY: "",
+        TELEGRAM_ENABLED: true,
+        WHATSAPP_ENABLED: true,
+      };
+    </script>
+    <script type="module" src="assets/js/router.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="ناوبری کنترل‌پنل">
+        <div class="sidebar__brand">
+          <span class="sidebar__logo" aria-hidden="true">🤖</span>
+          <div>
+            <h1 class="sidebar__title">Mvcobot</h1>
+            <p class="sidebar__subtitle">کنترل‌پنل ربات</p>
+          </div>
+        </div>
+        <nav class="sidebar__nav" role="navigation">
+          <a class="sidebar__link" href="#/dashboard" data-route-link>
+            <span>داشبورد</span>
+          </a>
+          <a class="sidebar__link" href="#/commands" data-route-link>
+            <span>دستورات</span>
+          </a>
+          <a class="sidebar__link" href="#/blocklist" data-route-link>
+            <span>لیست مسدود</span>
+          </a>
+          <a class="sidebar__link" href="#/settings" data-route-link>
+            <span>تنظیمات</span>
+          </a>
+        </nav>
+      </aside>
+      <main class="main-content" id="main-content" tabindex="-1">
+        <header class="main-header">
+          <div>
+            <h2 class="main-header__title">کنترل‌پنل Mvcobot</h2>
+            <p class="main-header__subtitle">
+              وضعیت ربات را پایش کنید و به‌روزرسانی‌ها را در لحظه انجام دهید.
+            </p>
+          </div>
+          <div class="main-header__actions">
+            <button class="btn btn--ghost" type="button" data-action="refresh">
+              به‌روزرسانی داده‌ها
+            </button>
+          </div>
+        </header>
+        <section class="view" data-router-view aria-live="polite"></section>
+      </main>
+    </div>
+    <div id="toast-root" aria-live="assertive" aria-atomic="true"></div>
+  </body>
+</html>
