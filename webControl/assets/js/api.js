@@ -12,6 +12,8 @@ const defaultConfig = {
 };
 
 const DAYS_IN_WEEK = 7;
+const DEFAULT_FALLBACK_MESSAGE =
+  'اتصال به پایگاه‌داده برقرار نیست؛ داده‌های نمونه نمایش داده می‌شوند.';
 
 const seededRandom = (() => {
   let seed = 42;
@@ -63,6 +65,7 @@ const mockStore = {
     monthly: monthlyData,
     cache: {
       lastUpdatedISO: new Date(Date.now() - 1000 * 60 * 32).toISOString(),
+      usingFallback: true,
     },
     status: {
       active: true,
@@ -75,6 +78,17 @@ const mockStore = {
         })),
       },
       message: 'ربات فعال و آماده پاسخ‌گویی است.',
+      operations: {
+        lunchBreak: { start: '12:30', end: '13:30' },
+        queryLimit: 50,
+        delivery: {
+          before: 'تحویل کالا هر روز ساعت 16 و پنجشنبه‌ها ساعت 12:30 در دفتر بازار',
+          after: 'ارسال مستقیم از انبار با زمان تقریبی تحویل 45 دقیقه امکان‌پذیر است.',
+          changeover: '15:30',
+        },
+      },
+      dataSource: 'fallback',
+      usingFallback: true,
     },
   },
   commands: [
@@ -127,6 +141,14 @@ const mockStore = {
       telegram: defaultConfig.TELEGRAM_ENABLED,
       whatsapp: defaultConfig.WHATSAPP_ENABLED,
     },
+    lunchBreak: { start: '12:30', end: '13:30' },
+    queryLimit: 50,
+    deliveryInfo: {
+      before: 'تحویل کالا هر روز ساعت 16 و پنجشنبه‌ها ساعت 12:30 در دفتر بازار',
+      after: 'ارسال مستقیم از انبار با زمان تقریبی تحویل 45 دقیقه امکان‌پذیر است.',
+      changeover: '15:30',
+    },
+    dataSource: 'fallback',
   },
 };
 
@@ -185,8 +207,12 @@ function clone(data) {
 }
 
 function emitFallback(detail) {
+  const payload = {
+    message: DEFAULT_FALLBACK_MESSAGE,
+    ...detail,
+  };
   try {
-    window.dispatchEvent(new CustomEvent(API_EVENTS.FALLBACK, { detail }));
+    window.dispatchEvent(new CustomEvent(API_EVENTS.FALLBACK, { detail: payload }));
   } catch (error) {
     // ignored: running outside the browser
   }
@@ -221,11 +247,20 @@ function ensureId(prefix) {
 
 export const api = {
   async getMetrics() {
-    return runWithFallback(
+    const result = await runWithFallback(
       'getMetrics',
       () => request('/api/v1/metrics'),
       () => mockStore.metrics
     );
+    if (
+      isMockMode() ||
+      result?.cache?.usingFallback ||
+      result?.status?.usingFallback ||
+      result?.status?.dataSource === 'fallback'
+    ) {
+      emitFallback({ method: 'getMetrics', reason: 'usingFallback' });
+    }
+    return result;
   },
 
   async getCommands() {
@@ -322,11 +357,15 @@ export const api = {
   },
 
   async getSettings() {
-    return runWithFallback(
+    const result = await runWithFallback(
       'getSettings',
       () => request('/api/v1/settings'),
       () => mockStore.settings
     );
+    if (isMockMode() || result?.dataSource === 'fallback') {
+      emitFallback({ method: 'getSettings', reason: 'usingFallback' });
+    }
+    return result;
   },
 
   async updateSettings(payload) {
@@ -350,14 +389,50 @@ export const api = {
           weekly: (payload.weekly ?? mockStore.settings.weekly).map((item) => ({ ...item })),
         };
       }
+      if (payload.lunchBreak) {
+        mockStore.settings.lunchBreak = {
+          start: payload.lunchBreak.start ?? null,
+          end: payload.lunchBreak.end ?? null,
+        };
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'queryLimit')) {
+        mockStore.settings.queryLimit = payload.queryLimit ?? null;
+      }
+      if (payload.deliveryInfo) {
+        mockStore.settings.deliveryInfo = {
+          before: payload.deliveryInfo.before ?? '',
+          after: payload.deliveryInfo.after ?? '',
+          changeover: payload.deliveryInfo.changeover ?? null,
+        };
+      }
+      if (payload.lunchBreak) {
+        mockStore.metrics.status.operations.lunchBreak = {
+          start: payload.lunchBreak.start ?? null,
+          end: payload.lunchBreak.end ?? null,
+        };
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'queryLimit')) {
+        mockStore.metrics.status.operations.queryLimit = payload.queryLimit ?? null;
+      }
+      if (payload.deliveryInfo) {
+        mockStore.metrics.status.operations.delivery = {
+          before: payload.deliveryInfo.before ?? '',
+          after: payload.deliveryInfo.after ?? '',
+          changeover: payload.deliveryInfo.changeover ?? null,
+        };
+      }
       return mockStore.settings;
     };
 
-    return runWithFallback(
+    const result = await runWithFallback(
       'updateSettings',
       () => request('/api/v1/settings', { method: 'PUT', body: payload }),
       mockHandler
     );
+    if (isMockMode() || result?.dataSource === 'fallback') {
+      emitFallback({ method: 'updateSettings', reason: 'usingFallback' });
+    }
+    return result;
   },
 
   async toggleBot(active) {

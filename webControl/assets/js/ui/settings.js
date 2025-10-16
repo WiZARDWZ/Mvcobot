@@ -99,6 +99,125 @@ export async function mount(container) {
   workingHoursForm.append(workingHoursActions);
   workingHoursCard.append(workingHoursForm);
 
+  const operationsCard = createElement('div', { classes: ['card'] });
+  operationsCard.append(
+    createElement('h4', { classes: ['section-heading__title'], text: 'تنظیمات پیام‌ها و محدودیت‌ها' })
+  );
+
+  const lunchGroup = createElement('div', { classes: ['settings-card__group'] });
+  lunchGroup.append(
+    createElement('h5', { classes: ['settings-card__subtitle'], text: 'استراحت ناهار' })
+  );
+  const lunchForm = createElement('form', { classes: ['settings-form'] });
+  const lunchGrid = createElement('div', { classes: ['form-grid'] });
+  const lunchStartControl = createElement('div', { classes: ['form-control'] });
+  const lunchStartInput = createElement('input', {
+    attrs: { type: 'time', id: 'lunch-start', name: 'lunch-start' },
+  });
+  lunchStartControl.append(
+    createElement('label', { attrs: { for: 'lunch-start' }, text: 'شروع ناهار' }),
+    lunchStartInput,
+    createElement('p', {
+      classes: ['form-control__hint'],
+      text: 'در این بازه ربات پاسخ‌گو نخواهد بود.',
+    })
+  );
+  const lunchEndControl = createElement('div', { classes: ['form-control'] });
+  const lunchEndInput = createElement('input', {
+    attrs: { type: 'time', id: 'lunch-end', name: 'lunch-end' },
+  });
+  lunchEndControl.append(
+    createElement('label', { attrs: { for: 'lunch-end' }, text: 'پایان ناهار' }),
+    lunchEndInput
+  );
+  lunchGrid.append(lunchStartControl, lunchEndControl);
+  lunchForm.append(lunchGrid);
+  const lunchActions = createElement('div', { classes: ['form-actions'] });
+  const lunchSubmit = createElement('button', {
+    classes: ['btn', 'btn--primary'],
+    attrs: { type: 'submit' },
+    text: 'ذخیره بازه ناهار',
+  });
+  lunchActions.append(lunchSubmit);
+  lunchForm.append(lunchActions);
+  lunchGroup.append(lunchForm);
+
+  const queryGroup = createElement('div', { classes: ['settings-card__group'] });
+  queryGroup.append(
+    createElement('h5', { classes: ['settings-card__subtitle'], text: 'محدودیت استعلام' })
+  );
+  const queryForm = createElement('form', { classes: ['settings-form'] });
+  const queryControl = createElement('div', { classes: ['form-control'] });
+  const queryLimitInput = createElement('input', {
+    attrs: {
+      type: 'number',
+      id: 'query-limit',
+      name: 'query-limit',
+      min: '0',
+      inputmode: 'numeric',
+    },
+  });
+  queryControl.append(
+    createElement('label', { attrs: { for: 'query-limit' }, text: 'تعداد مجاز در ۲۴ ساعت' }),
+    queryLimitInput,
+    createElement('p', {
+      classes: ['form-control__hint'],
+      text: 'برای حذف محدودیت، مقدار را خالی بگذارید.',
+    })
+  );
+  queryForm.append(queryControl);
+  const queryActions = createElement('div', { classes: ['form-actions'] });
+  const querySubmit = createElement('button', {
+    classes: ['btn', 'btn--primary'],
+    attrs: { type: 'submit' },
+    text: 'ذخیره محدودیت',
+  });
+  queryActions.append(querySubmit);
+  queryForm.append(queryActions);
+  queryGroup.append(queryForm);
+
+  const deliveryGroup = createElement('div', { classes: ['settings-card__group'] });
+  deliveryGroup.append(
+    createElement('h5', { classes: ['settings-card__subtitle'], text: 'متن اطلاع‌رسانی تحویل کالا' })
+  );
+  const deliveryForm = createElement('form', { classes: ['settings-form'] });
+  const deliveryBeforeControl = createElement('div', { classes: ['form-control'] });
+  const deliveryBeforeInput = createElement('textarea', {
+    attrs: { id: 'delivery-before', name: 'delivery-before', rows: '3' },
+  });
+  deliveryBeforeControl.append(
+    createElement('label', { attrs: { for: 'delivery-before' }, text: 'متن قبل از ساعت مشخص' }),
+    deliveryBeforeInput
+  );
+  const deliveryAfterControl = createElement('div', { classes: ['form-control'] });
+  const deliveryAfterInput = createElement('textarea', {
+    attrs: { id: 'delivery-after', name: 'delivery-after', rows: '3' },
+  });
+  deliveryAfterControl.append(
+    createElement('label', { attrs: { for: 'delivery-after' }, text: 'متن بعد از ساعت مشخص' }),
+    deliveryAfterInput
+  );
+  const deliveryTimeControl = createElement('div', { classes: ['form-control'] });
+  const changeoverInput = createElement('input', {
+    attrs: { type: 'time', id: 'changeover-hour', name: 'changeover-hour' },
+  });
+  deliveryTimeControl.append(
+    createElement('label', { attrs: { for: 'changeover-hour' }, text: 'ساعت تغییر متن' }),
+    changeoverInput
+  );
+  deliveryForm.append(deliveryBeforeControl, deliveryAfterControl, deliveryTimeControl);
+  const deliveryActions = createElement('div', { classes: ['form-actions'] });
+  const deliverySubmit = createElement('button', {
+    classes: ['btn', 'btn--primary'],
+    attrs: { type: 'submit' },
+    text: 'ذخیره متن تحویل کالا',
+  });
+  deliveryActions.append(deliverySubmit);
+  deliveryForm.append(deliveryActions);
+  deliveryGroup.append(deliveryForm);
+
+  operationsCard.append(lunchGroup, queryGroup, deliveryGroup);
+
   const platformCard = createElement('div', { classes: ['card'] });
   platformCard.append(
     createElement('h4', { classes: ['section-heading__title'], text: 'پلتفرم‌های فعال' })
@@ -123,7 +242,14 @@ export async function mount(container) {
 
   const loadingState = createLoadingState('در حال دریافت تنظیمات...');
 
-  container.append(header, workingHoursCard, platformCard, cacheCard, loadingState);
+  container.append(
+    header,
+    workingHoursCard,
+    operationsCard,
+    platformCard,
+    cacheCard,
+    loadingState
+  );
 
   let settings = null;
 
@@ -155,6 +281,21 @@ export async function mount(container) {
       control.updateDisabledState();
     });
 
+    const lunchBreak = settings.lunchBreak ?? {};
+    lunchStartInput.value = lunchBreak.start ?? '';
+    lunchEndInput.value = lunchBreak.end ?? '';
+
+    if (typeof settings.queryLimit === 'number' && settings.queryLimit > 0) {
+      queryLimitInput.value = settings.queryLimit;
+    } else {
+      queryLimitInput.value = '';
+    }
+
+    const deliveryInfo = settings.deliveryInfo ?? {};
+    deliveryBeforeInput.value = deliveryInfo.before ?? '';
+    deliveryAfterInput.value = deliveryInfo.after ?? '';
+    changeoverInput.value = deliveryInfo.changeover ?? '';
+
     renderPlatformToggles(settings.platforms ?? {});
   }
 
@@ -180,6 +321,74 @@ export async function mount(container) {
     }
   };
   workingHoursForm.addEventListener('submit', onWorkingHoursSubmit);
+
+  const onLunchSubmit = async (event) => {
+    event.preventDefault();
+    const payload = {
+      lunchBreak: {
+        start: lunchStartInput.value || null,
+        end: lunchEndInput.value || null,
+      },
+    };
+    try {
+      lunchSubmit.disabled = true;
+      settings = await api.updateSettings(payload);
+      applySettings();
+      renderToast({ message: 'بازه ناهار ذخیره شد.' });
+    } catch (error) {
+      renderToast({ message: error.message, type: 'error' });
+    } finally {
+      lunchSubmit.disabled = false;
+    }
+  };
+  lunchForm.addEventListener('submit', onLunchSubmit);
+
+  const onQuerySubmit = async (event) => {
+    event.preventDefault();
+    const raw = queryLimitInput.value.trim();
+    let limitValue = null;
+    if (raw !== '') {
+      const parsed = Number.parseInt(raw, 10);
+      if (Number.isNaN(parsed)) {
+        renderToast({ message: 'مقدار واردشده نامعتبر است.', type: 'error' });
+        return;
+      }
+      limitValue = parsed;
+    }
+    try {
+      querySubmit.disabled = true;
+      settings = await api.updateSettings({ queryLimit: limitValue });
+      applySettings();
+      renderToast({ message: 'محدودیت استعلام ذخیره شد.' });
+    } catch (error) {
+      renderToast({ message: error.message, type: 'error' });
+    } finally {
+      querySubmit.disabled = false;
+    }
+  };
+  queryForm.addEventListener('submit', onQuerySubmit);
+
+  const onDeliverySubmit = async (event) => {
+    event.preventDefault();
+    const payload = {
+      deliveryInfo: {
+        before: deliveryBeforeInput.value.trim(),
+        after: deliveryAfterInput.value.trim(),
+        changeover: changeoverInput.value || null,
+      },
+    };
+    try {
+      deliverySubmit.disabled = true;
+      settings = await api.updateSettings(payload);
+      applySettings();
+      renderToast({ message: 'متن تحویل کالا ذخیره شد.' });
+    } catch (error) {
+      renderToast({ message: error.message, type: 'error' });
+    } finally {
+      deliverySubmit.disabled = false;
+    }
+  };
+  deliveryForm.addEventListener('submit', onDeliverySubmit);
 
   function renderPlatformToggles(platforms) {
     platformList.innerHTML = '';
@@ -247,6 +456,9 @@ export async function mount(container) {
     },
     destroy() {
       workingHoursForm.removeEventListener('submit', onWorkingHoursSubmit);
+      lunchForm.removeEventListener('submit', onLunchSubmit);
+      queryForm.removeEventListener('submit', onQuerySubmit);
+      deliveryForm.removeEventListener('submit', onDeliverySubmit);
       invalidateButton.removeEventListener('click', onInvalidateClick);
       dayControls.forEach((control) => control.dispose?.());
     },
