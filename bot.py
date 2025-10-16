@@ -26,6 +26,7 @@ except Exception:
     HTTPXRequest = None  # اگر نبود، بدون آن ادامه می‌دهیم
 
 from config import BOT_TOKEN
+from control_panel import start_control_panel_server
 
 from handlers.start import start
 from handlers.inventory import (
@@ -374,8 +375,22 @@ def _run_polling_resilient(app):
 
 
 def main():
+    port = int(os.getenv("CONTROL_PANEL_PORT", "8080"))
+    server = start_control_panel_server(port=port)
+    if server:
+        print(f"[WebControl] Control panel serving on port {port}")
+    else:
+        print("[WebControl] Control panel server failed to start.")
+
     app = _build_application()
-    _run_polling_resilient(app)
+    try:
+        _run_polling_resilient(app)
+    finally:
+        if server:
+            try:
+                server.shutdown()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

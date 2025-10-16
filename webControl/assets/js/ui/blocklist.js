@@ -23,7 +23,7 @@ export async function mount(container) {
   const toolbar = createToolbar({
     title: 'لیست مسدودسازی',
     search: {
-      placeholder: 'جستجوی نام کاربری یا شماره...',
+      placeholder: 'جستجوی شناسه کاربر...',
       ariaLabel: 'جستجو در لیست مسدود',
     },
     actions: [
@@ -36,19 +36,17 @@ export async function mount(container) {
 
   const table = createTable(
     [
-      { label: 'شناسه', field: 'id' },
-      { label: 'کاربر / شماره', field: 'phoneOrUser' },
+      {
+        label: 'شناسه کاربر',
+        render: (row) => row.userId?.toLocaleString('fa-IR') ?? row.id,
+      },
       {
         label: 'پلتفرم',
         render: (row) => createBadge(PLATFORM_LABELS[row.platform] ?? row.platform, 'default'),
       },
       {
-        label: 'دلیل',
-        render: (row) => row.reason || '—',
-      },
-      {
-        label: 'تاریخ ایجاد',
-        render: (row) => formatDateTime(row.createdAtISO),
+        label: 'تاریخ ثبت',
+        render: (row) => formatDateTime(row.createdAtISO) || '—',
       },
       {
         label: 'عملیات',
@@ -65,7 +63,7 @@ export async function mount(container) {
         },
       },
     ],
-    { emptyMessage: 'شماره یا کاربری مسدود نشده است.' }
+    { emptyMessage: 'کاربری در لیست مسدود یافت نشد.' }
   );
 
   const loadingState = createLoadingState('در حال دریافت لیست...');
@@ -100,7 +98,7 @@ export async function mount(container) {
       return;
     }
     const filtered = entries.filter((item) => {
-      return [item.phoneOrUser, item.reason, PLATFORM_LABELS[item.platform]]
+      return [String(item.userId ?? ''), item.phoneOrUser]
         .filter(Boolean)
         .some((field) => field.toLowerCase().includes(value));
     });
@@ -117,47 +115,26 @@ export async function mount(container) {
   async function openBlockModal() {
     const form = createElement('form');
 
-    const phoneControl = createElement('div', { classes: ['form-control'] });
-    phoneControl.append(
-      createElement('label', { attrs: { for: 'block-phone' }, text: 'کاربر / شماره' }),
+    const userControl = createElement('div', { classes: ['form-control'] });
+    userControl.append(
+      createElement('label', { attrs: { for: 'block-user-id' }, text: 'شناسه کاربر تلگرام' }),
       createElement('input', {
         attrs: {
-          id: 'block-phone',
-          name: 'phoneOrUser',
+          id: 'block-user-id',
+          name: 'userId',
           required: true,
-          placeholder: '@username یا +989123456789',
+          type: 'number',
+          inputmode: 'numeric',
+          placeholder: 'مثال: 123456789',
         },
+      }),
+      createElement('p', {
+        classes: ['form-control__hint'],
+        text: 'شناسه عددی کاربر را وارد کنید تا دسترسی او به ربات قطع شود.',
       })
     );
 
-    const platformControl = createElement('div', { classes: ['form-control'] });
-    const select = createElement('select', {
-      attrs: { id: 'block-platform', name: 'platform', required: true },
-    });
-    select.append(
-      createElement('option', { attrs: { value: 'telegram' }, text: 'تلگرام' }),
-      createElement('option', { attrs: { value: 'whatsapp' }, text: 'واتساپ' })
-    );
-    platformControl.append(
-      createElement('label', { attrs: { for: 'block-platform' }, text: 'پلتفرم' }),
-      select
-    );
-
-    const reasonControl = createElement('div', { classes: ['form-control'] });
-    reasonControl.append(
-      createElement('label', { attrs: { for: 'block-reason' }, text: 'دلیل' }),
-      createElement('textarea', {
-        attrs: {
-          id: 'block-reason',
-          name: 'reason',
-          rows: 3,
-          maxlength: 200,
-          placeholder: 'توضیح مختصر...',
-        },
-      })
-    );
-
-    form.append(phoneControl, platformControl, reasonControl);
+    form.append(userControl);
 
     const { close } = renderModal({
       title: 'افزودن کاربر به لیست',
@@ -168,11 +145,13 @@ export async function mount(container) {
       event.preventDefault();
       if (!form.reportValidity()) return;
       const formData = new FormData(form);
-      const payload = {
-        phoneOrUser: String(formData.get('phoneOrUser') || '').trim(),
-        platform: formData.get('platform'),
-        reason: String(formData.get('reason') || '').trim(),
-      };
+      const userIdValue = String(formData.get('userId') || '').trim();
+      const userId = Number(userIdValue);
+      if (!userIdValue || Number.isNaN(userId)) {
+        renderToast({ message: 'شناسه کاربر باید عدد باشد.', type: 'error' });
+        return;
+      }
+      const payload = { userId };
       try {
         const created = await api.addBlockItem(payload);
         entries = [created, ...entries];
@@ -196,7 +175,7 @@ export async function mount(container) {
   }
 
   async function removeBlock(item) {
-    const confirmed = window.confirm(`آیا از حذف ${item.phoneOrUser} مطمئن هستید؟`);
+    const confirmed = window.confirm(`آیا از حذف کاربر ${item.userId ?? item.phoneOrUser} مطمئن هستید؟`);
     if (!confirmed) return;
     try {
       await api.removeBlockItem(item.id);
