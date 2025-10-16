@@ -160,7 +160,7 @@ function getConfig() {
 
 function isMockMode() {
   const { API_BASE_URL } = getConfig();
-  return !API_BASE_URL;
+  return API_BASE_URL === null || typeof API_BASE_URL === 'undefined';
 }
 
 function withAuthHeaders(headers = {}) {
@@ -176,7 +176,12 @@ function withAuthHeaders(headers = {}) {
 
 async function request(path, { method = 'GET', body } = {}) {
   const { API_BASE_URL } = getConfig();
-  const url = `${API_BASE_URL}${path}`;
+  let base = '';
+  if (typeof API_BASE_URL === 'string') {
+    base = API_BASE_URL.trim();
+  }
+  const normalizedBase = base.endsWith('/') ? base.slice(0, -1) : base;
+  const url = normalizedBase ? `${normalizedBase}${path}` : path;
   const options = {
     method,
     headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
