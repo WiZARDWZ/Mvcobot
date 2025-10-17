@@ -13,6 +13,7 @@ from telegram.helpers import escape_markdown
 
 from database.connector import fetch_all_inventory_data
 from database.connector_bot import get_setting, is_blacklisted
+from utils.platforms import is_platform_enabled
 
 # ================= Consts & Globals =================
 
@@ -315,7 +316,7 @@ async def update_inventory_cache():
 
 async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # quick guards
-    if get_setting("enabled") != "true":
+    if not is_platform_enabled("telegram"):
         await update.message.reply_text("⛔️ ربات غیرفعال است. لطفاً بعداً مراجعه کنید.")
         return ConversationHandler.END
 
@@ -342,7 +343,7 @@ async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAUL
 
 async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # quick guards
-    if get_setting("enabled") != "true":
+    if not is_platform_enabled("telegram"):
         await update.message.reply_text("⛔️ ربات غیرفعال است. لطفاً بعداً مراجعه کنید.")
         return ConversationHandler.END
 

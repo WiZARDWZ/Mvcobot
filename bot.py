@@ -27,6 +27,8 @@ except Exception:
 
 from config import BOT_TOKEN
 from control_panel import start_control_panel_server
+import control_panel.runtime as control_panel_runtime
+from control_panel.logic import get_platform_snapshot
 
 from handlers.start import start
 from handlers.inventory import (
@@ -188,6 +190,20 @@ async def _post_init(application):
     start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{start_time}] MVCO BOT starting up...")
 
+    try:
+        loop = asyncio.get_running_loop()
+        control_panel_runtime.register_event_loop(loop)
+    except Exception as exc:
+        logging.debug("Failed to register control panel runtime loop: %s", exc, exc_info=True)
+
+    active = True
+    platforms = {"telegram": True, "whatsapp": True}
+    try:
+        active, platforms = get_platform_snapshot()
+        control_panel_runtime.apply_platform_states(platforms, active=active)
+    except Exception as exc:
+        logging.debug("Failed to apply initial platform states: %s", exc, exc_info=True)
+
     # --- ریفرش اولیه کش انبار
     try:
         await refresh_inventory_cache_once()
@@ -245,11 +261,10 @@ async def _post_init(application):
 
     # --- تضمین استارت واتساپ همین‌جا (حتی اگر Job اولیه miss شود)
     if _HAS_WA_MANAGER and wa_controller is not None:
-        try:
-            await wa_controller.start()
-            print("[WA] started from post_init")
-        except Exception as e:
-            print(f"[WA] start from post_init failed: {e}")
+        if active and platforms.get("whatsapp", True):
+            print("[WA] start requested (runtime sync)")
+        else:
+            print("[WA] skipped start (disabled by settings)")
 
 
 def _build_application() -> "Application":

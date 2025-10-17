@@ -2,7 +2,7 @@
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.error import BadRequest  # ⬅️ برای هندل کردن callback قدیمی
-from database.connector_bot import get_setting
+from utils.platforms import is_platform_enabled
 from keyboard import main_menu_reply  # استفاده از منوی اصلی استاندارد
 
 async def _safe_answer_callback(query) -> None:
@@ -29,7 +29,7 @@ async def _safe_answer_callback(query) -> None:
         return
 
 async def handle_main_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if get_setting("enabled") != "true":
+    if not is_platform_enabled("telegram"):
         await update.message.reply_text("⛔️ ربات غیرفعال است. لطفاً بعداً مراجعه کنید.")
         return ConversationHandler.END
 

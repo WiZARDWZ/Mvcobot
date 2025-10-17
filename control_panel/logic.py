@@ -16,6 +16,7 @@ from database.connector_bot import (
     set_setting,
 )
 from handlers.inventory import refresh_inventory_cache_once
+from . import runtime
 
 LOGGER = logging.getLogger(__name__)
 
@@ -131,6 +132,10 @@ def _format_month_label(year: int, month: int) -> str:
     index = max(1, min(month, 12)) - 1
     month_name = PERSIAN_MONTHS[index]
     return f"{month_name} {year}"
+
+
+def _is_globally_enabled() -> bool:
+    return (get_setting("enabled") or "true").strip().lower() == "true"
 
 
 def _table_exists(cur, table_name: str) -> bool:
@@ -346,7 +351,7 @@ def _merge_platform_flags(current: Dict[str, bool], overrides: Dict[str, Any]) -
 
 
 def _build_status_snapshot() -> Dict[str, Any]:
-    enabled = (get_setting("enabled") or "true").lower() == "true"
+    enabled = _is_globally_enabled()
     weekly = _build_weekly_schedule()
     platforms = _load_platform_settings(enabled)
     message = "ربات فعال و آماده پاسخ‌گویی است." if enabled else "ربات غیرفعال است."
@@ -594,6 +599,12 @@ def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
         current = _load_platform_settings(True)
         normalized = _merge_platform_flags(current, platforms)
         _save_json_setting(PLATFORMS_KEY, normalized)
+        try:
+            active = _is_globally_enabled()
+            effective = _load_platform_settings(active)
+            runtime.apply_platform_states(effective, active=active)
+        except Exception:
+            LOGGER.debug("Skipping runtime platform sync due to runtime error.", exc_info=True)
 
     if "lunchBreak" in payload:
         lunch_break = payload.get("lunchBreak") or {}
@@ -635,8 +646,19 @@ def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def toggle_bot(active: bool) -> Dict[str, Any]:
     set_setting("enabled", "true" if active else "false")
+    try:
+        platforms = _load_platform_settings(active)
+        runtime.apply_platform_states(platforms, active=active)
+    except Exception:
+        LOGGER.debug("Skipping runtime platform sync due to runtime error.", exc_info=True)
     status = _build_status_snapshot()
     return status
+
+
+def get_platform_snapshot() -> Tuple[bool, Dict[str, bool]]:
+    enabled = _is_globally_enabled()
+    platforms = _load_platform_settings(enabled)
+    return enabled, platforms
 
 
 def invalidate_cache() -> Dict[str, Any]:

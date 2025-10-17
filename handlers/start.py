@@ -1,7 +1,7 @@
 import os, sys
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InputFile
 from telegram.ext import ContextTypes
-from database.connector_bot import get_setting
+from utils.platforms import is_platform_enabled
 
 def resource_path(relative_path: str) -> str:
     """
@@ -14,7 +14,7 @@ def resource_path(relative_path: str) -> str:
     return os.path.join(base_path, relative_path)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if get_setting("enabled") != "true":
+    if not is_platform_enabled("telegram"):
         await update.message.reply_text("⛔️ ربات غیرفعال است. لطفاً بعداً مراجعه کنید.")
         return
     keyboard = [
