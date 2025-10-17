@@ -182,6 +182,21 @@ export async function mount(container) {
     const messageRow = createElement('div', { classes: ['status-row__item'] });
     messageRow.append(createElement('span', { text: 'وضعیت سرویس' }), statusBadge);
 
+    const platformsRow = createElement('div', { classes: ['status-row__item', 'status-row__item--platforms'] });
+    platformsRow.append(createElement('span', { text: 'پلتفرم‌ها' }));
+    const platformValues = createElement('div', { classes: ['status-row__value', 'status-row__value--platforms'] });
+    const platforms = data.status.platforms ?? {};
+    [
+      ['telegram', 'تلگرام'],
+      ['whatsapp', 'واتساپ'],
+    ].forEach(([key, label]) => {
+      const wrapper = createElement('span', { classes: ['status-row__platform'] });
+      const badge = createBadge(platforms[key] ? 'فعال' : 'غیرفعال', platforms[key] ? 'success' : 'danger');
+      wrapper.append(document.createTextNode(label), badge);
+      platformValues.append(wrapper);
+    });
+    platformsRow.append(platformValues);
+
     const operations = data.status.operations ?? {};
 
     const lunchBreak = operations.lunchBreak ?? {};
@@ -229,6 +244,7 @@ export async function mount(container) {
     statusContent.append(
       statusRow,
       messageRow,
+      platformsRow,
       createElement('p', { classes: ['status-row__message'], text: message }),
       lunchRow,
       queryRow,

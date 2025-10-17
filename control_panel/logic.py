@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from database.connector_bot import (
     add_to_blacklist,
@@ -132,43 +133,155 @@ def _format_month_label(year: int, month: int) -> str:
     return f"{month_name} {year}"
 
 
-def _aggregate_metrics_from_db() -> Metrics:
+def _table_exists(cur, table_name: str) -> bool:
+    try:
+        schema = None
+        name = table_name
+        if "." in table_name:
+            schema, name = table_name.split(".", 1)
+        candidates = {name.strip("[]"), name, name.upper(), name.lower()}
+        for candidate in candidates:
+            if not candidate:
+                continue
+            params = [candidate]
+            schema_clause = ""
+            if schema:
+                schema_clause = " AND TABLE_SCHEMA = ?"
+                params.append(schema)
+            row = cur.execute(
+                f"SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = ?{schema_clause}",
+                params,
+            ).fetchone()
+            if row:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _column_exists(cur, table_name: str, column_name: str) -> bool:
+    try:
+        schema = None
+        table = table_name
+        if "." in table_name:
+            schema, table = table_name.split(".", 1)
+        params = [table.strip("[]"), column_name]
+        schema_clause = ""
+        if schema:
+            schema_clause = " AND TABLE_SCHEMA = ?"
+            params.insert(1, schema)
+        row = cur.execute(
+            f"SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?{schema_clause} AND COLUMN_NAME = ?",
+            params,
+        ).fetchone()
+        return bool(row)
+    except Exception:
+        return False
+
+
+def _collect_metrics(cur) -> Tuple[Dict[str, int], List[Dict[str, Any]]]:
     totals = {"telegram": 0, "whatsapp": 0, "all": 0}
+    monthly_map: OrderedDict = OrderedDict()
+
+    def record(year: int, month: int, telegram: int = 0, whatsapp: int = 0) -> None:
+        key = (year, month)
+        bucket = monthly_map.setdefault(key, {"telegram": 0, "whatsapp": 0})
+        bucket["telegram"] += telegram
+        bucket["whatsapp"] += whatsapp
+
+    if _column_exists(cur, "message_log", "platform"):
+        rows = cur.execute(
+            """
+            SELECT
+                YEAR(timestamp) AS y,
+                MONTH(timestamp) AS m,
+                SUM(CASE WHEN LOWER(platform) = 'telegram' THEN 1 ELSE 0 END) AS telegram_cnt,
+                SUM(CASE WHEN LOWER(platform) = 'whatsapp' THEN 1 ELSE 0 END) AS whatsapp_cnt
+            FROM message_log
+            WHERE timestamp >= DATEADD(MONTH, -11, GETDATE())
+            GROUP BY YEAR(timestamp), MONTH(timestamp)
+            ORDER BY y, m
+            """
+        ).fetchall()
+        for row in rows:
+            year, month = int(row[0]), int(row[1])
+            telegram_cnt = int(row[2] or 0)
+            whatsapp_cnt = int(row[3] or 0)
+            totals["telegram"] += telegram_cnt
+            totals["whatsapp"] += whatsapp_cnt
+            record(year, month, telegram_cnt, whatsapp_cnt)
+    else:
+        rows = cur.execute(
+            """
+            SELECT
+                YEAR(timestamp) AS y,
+                MONTH(timestamp) AS m,
+                COUNT(*) AS cnt
+            FROM message_log
+            WHERE timestamp >= DATEADD(MONTH, -11, GETDATE())
+            GROUP BY YEAR(timestamp), MONTH(timestamp)
+            ORDER BY y, m
+            """
+        ).fetchall()
+        for row in rows:
+            year, month = int(row[0]), int(row[1])
+            count = int(row[2] or 0)
+            totals["telegram"] += count
+            record(year, month, telegram=count)
+
+    whatsapp_sources = [
+        "wa_message_log",
+        "whatsapp_message_log",
+        "whatsapp_log",
+        "message_log_whatsapp",
+    ]
+    for table in whatsapp_sources:
+        if _table_exists(cur, table):
+            rows = cur.execute(
+                f"""
+                SELECT
+                    YEAR(timestamp) AS y,
+                    MONTH(timestamp) AS m,
+                    COUNT(*) AS cnt
+                FROM {table}
+                WHERE timestamp >= DATEADD(MONTH, -11, GETDATE())
+                GROUP BY YEAR(timestamp), MONTH(timestamp)
+                ORDER BY y, m
+                """
+            ).fetchall()
+            for row in rows:
+                year, month = int(row[0]), int(row[1])
+                count = int(row[2] or 0)
+                totals["whatsapp"] += count
+                record(year, month, whatsapp=count)
+            break
+
+    totals["all"] = totals["telegram"] + totals["whatsapp"]
+
     monthly: List[Dict[str, Any]] = []
+    for (year, month), values in monthly_map.items():
+        telegram = values.get("telegram", 0)
+        whatsapp = values.get("whatsapp", 0)
+        monthly.append(
+            {
+                "month": _format_month_label(year, month),
+                "telegram": telegram,
+                "whatsapp": whatsapp,
+                "all": telegram + whatsapp,
+            }
+        )
+
+    return totals, monthly
+
+
+def _aggregate_metrics_from_db() -> Metrics:
     status = _build_status_snapshot()
 
     fallback = False
     try:
         with get_connection() as conn:
             cur = conn.cursor()
-            rows = cur.execute(
-                """
-                SELECT
-                    YEAR(timestamp) AS y,
-                    MONTH(timestamp) AS m,
-                    COUNT(*) AS cnt
-                FROM message_log
-                WHERE timestamp >= DATEADD(MONTH, -11, GETDATE())
-                GROUP BY YEAR(timestamp), MONTH(timestamp)
-                ORDER BY y, m
-                """
-            ).fetchall()
-
-            total_count = 0
-            for row in rows:
-                year, month, count = int(row[0]), int(row[1]), int(row[2])
-                total_count += count
-                monthly.append(
-                    {
-                        "month": _format_month_label(year, month),
-                        "telegram": count,
-                        "whatsapp": 0,
-                        "all": count,
-                    }
-                )
-
-            totals["telegram"] = total_count
-            totals["all"] = total_count
+            totals, monthly = _collect_metrics(cur)
     except Exception as exc:
         fallback = True
         LOGGER.warning("Failed to aggregate metrics from database: %s", exc)
@@ -186,7 +299,7 @@ def _aggregate_metrics_from_db() -> Metrics:
 
 def _build_mock_totals() -> Dict[str, int]:
     telegram = 320
-    whatsapp = 0
+    whatsapp = 185
     return {"telegram": telegram, "whatsapp": whatsapp, "all": telegram + whatsapp}
 
 
@@ -199,21 +312,43 @@ def _build_mock_monthly() -> List[Dict[str, Any]]:
         month = current.month
         label = _format_month_label(year, month)
         telegram = 50 + (offset * 3)
+        whatsapp = 35 + (offset * 2)
         results.append(
             {
                 "month": label,
                 "telegram": telegram,
-                "whatsapp": 0,
-                "all": telegram,
+                "whatsapp": whatsapp,
+                "all": telegram + whatsapp,
             }
         )
     return results
 
 
+def _load_platform_settings(enabled: bool) -> Dict[str, bool]:
+    stored = _load_json_setting(PLATFORMS_KEY, None)
+    defaults = {"telegram": enabled, "whatsapp": True}
+    merged = {**defaults}
+    if isinstance(stored, dict):
+        for key, value in stored.items():
+            if key in merged:
+                merged[key] = bool(value)
+    if not enabled:
+        return {name: False for name in merged}
+    return merged
+
+
+def _merge_platform_flags(current: Dict[str, bool], overrides: Dict[str, Any]) -> Dict[str, bool]:
+    merged = {**current}
+    for key, value in overrides.items():
+        if key in merged:
+            merged[key] = bool(value)
+    return merged
+
+
 def _build_status_snapshot() -> Dict[str, Any]:
     enabled = (get_setting("enabled") or "true").lower() == "true"
     weekly = _build_weekly_schedule()
-    platforms = _load_json_setting(PLATFORMS_KEY, {"telegram": enabled, "whatsapp": True})
+    platforms = _load_platform_settings(enabled)
     message = "ربات فعال و آماده پاسخ‌گویی است." if enabled else "ربات غیرفعال است."
 
     timezone_value = get_setting(TIMEZONE_KEY) or "Asia/Tehran"
@@ -456,7 +591,9 @@ def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     platforms = payload.get("platforms")
     if isinstance(platforms, dict):
-        _save_json_setting(PLATFORMS_KEY, platforms)
+        current = _load_platform_settings(True)
+        normalized = _merge_platform_flags(current, platforms)
+        _save_json_setting(PLATFORMS_KEY, normalized)
 
     if "lunchBreak" in payload:
         lunch_break = payload.get("lunchBreak") or {}

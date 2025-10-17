@@ -294,9 +294,32 @@ textarea:focus-visible {
   gap: 12px;
 }
 
+.status-row__item--platforms {
+  align-items: flex-start;
+}
+
 .status-row__value {
   font-weight: 600;
   color: var(--color-text);
+}
+
+.status-row__value--platforms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  justify-content: flex-end;
+}
+
+.status-row__platform {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.status-row__platform .badge {
+  margin-inline-start: 4px;
 }
 
 .status-row__value--multiline {
