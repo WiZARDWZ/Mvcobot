@@ -167,6 +167,8 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
             self._handle_api(lambda: (HTTPStatus.OK, logic.get_blocklist()))
         elif path == "/api/v1/settings":
             self._handle_api(lambda: (HTTPStatus.OK, logic.get_settings()))
+        elif path == "/api/v1/audit-log":
+            self._handle_api(lambda: (HTTPStatus.OK, logic.get_audit_log()))
         else:
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint not found")
 

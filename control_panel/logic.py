@@ -64,6 +64,9 @@ QUERY_LIMIT_KEY = "query_limit"
 DELIVERY_BEFORE_KEY = "delivery_before"
 DELIVERY_AFTER_KEY = "delivery_after"
 CHANGEOVER_KEY = "changeover_hour"
+AUDIT_LOG_KEY = "panel_audit_log_v1"
+
+MAX_AUDIT_LOG_ENTRIES = 200
 
 
 class ControlPanelError(Exception):
@@ -126,6 +129,57 @@ def _save_json_setting(key: str, value: Any) -> None:
     except Exception:
         LOGGER.exception("Failed to persist JSON setting %s", key)
         raise ControlPanelError("ذخیره‌سازی تنظیمات امکان‌پذیر نبود. دوباره تلاش کنید.", status=500)
+
+
+def _load_audit_log_entries() -> List[Dict[str, Any]]:
+    data = _load_json_setting(AUDIT_LOG_KEY, [])
+    if not isinstance(data, list):
+        return []
+
+    entries: List[Dict[str, Any]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        message = str(item.get("message") or "").strip()
+        timestamp = item.get("timestamp") or ""
+        if not message or not timestamp:
+            continue
+        entry = {
+            "id": str(item.get("id") or f"log-{len(entries) + 1}"),
+            "timestamp": timestamp,
+            "message": message,
+        }
+        if item.get("actor"):
+            entry["actor"] = str(item.get("actor"))
+        if item.get("details"):
+            entry["details"] = item.get("details")
+        entries.append(entry)
+        if len(entries) >= MAX_AUDIT_LOG_ENTRIES:
+            break
+    return entries
+
+
+def _persist_audit_log(entries: List[Dict[str, Any]]) -> None:
+    try:
+        _save_json_setting(AUDIT_LOG_KEY, entries[:MAX_AUDIT_LOG_ENTRIES])
+    except ControlPanelError:
+        # Audit log persistence failures should not block the primary action.
+        LOGGER.debug("Failed to persist audit trail entry", exc_info=True)
+
+
+def _append_audit_event(message: str, *, actor: str = "کنترل‌پنل", details: Optional[Any] = None) -> None:
+    entry = {
+        "id": f"log-{int(datetime.now().timestamp() * 1000)}",
+        "timestamp": _now_iso(),
+        "message": message,
+        "actor": actor,
+    }
+    if details:
+        entry["details"] = details
+
+    entries = _load_audit_log_entries()
+    entries.insert(0, entry)
+    _persist_audit_log(entries)
 
 
 def _format_month_label(year: int, month: int) -> str:
@@ -454,6 +508,10 @@ def create_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
     commands.insert(0, new_item)
     _save_json_setting(COMMANDS_KEY, commands)
+    _append_audit_event(
+        "ثبت دستور جدید",
+        details=f"{command} (شناسه {new_item['id']})",
+    )
     return new_item
 
 
@@ -475,6 +533,10 @@ def update_command(command_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
                 updated["enabled"] = bool(payload.get("enabled"))
             commands[idx] = updated
             _save_json_setting(COMMANDS_KEY, commands)
+            _append_audit_event(
+                "ویرایش دستور",
+                details=f"{updated['command']} (شناسه {command_id})",
+            )
             return updated
     raise ControlPanelError("دستور مورد نظر یافت نشد.", status=404)
 
@@ -485,6 +547,7 @@ def delete_command(command_id: str) -> Dict[str, Any]:
     if len(new_commands) == len(commands):
         raise ControlPanelError("دستور مورد نظر یافت نشد.", status=404)
     _save_json_setting(COMMANDS_KEY, new_commands)
+    _append_audit_event("حذف دستور", details=f"شناسه {command_id}")
     return {"success": True}
 
 
@@ -522,6 +585,7 @@ def add_block_item(payload: Dict[str, Any]) -> Dict[str, Any]:
         LOGGER.warning("Failed to add user %s to blacklist: %s", user_id, exc)
         raise ControlPanelError("افزودن به لیست مسدود با خطا مواجه شد.", status=500)
 
+    _append_audit_event("افزودن به لیست مسدود", details=f"کاربر {user_id}")
     return {
         "id": str(user_id),
         "userId": user_id,
@@ -542,6 +606,7 @@ def remove_block_item(item_id: str) -> Dict[str, Any]:
     except Exception as exc:
         LOGGER.warning("Failed to remove user %s from blacklist: %s", user_id, exc)
         raise ControlPanelError("حذف از لیست مسدود امکان‌پذیر نبود.", status=500)
+    _append_audit_event("حذف از لیست مسدود", details=f"کاربر {user_id}")
     return {"success": True}
 
 
@@ -562,11 +627,25 @@ def get_settings() -> Dict[str, Any]:
     }
 
 
+def get_audit_log(limit: int = 50) -> Dict[str, Any]:
+    entries = _load_audit_log_entries()
+    total = len(entries)
+    if limit > 0:
+        entries = entries[:limit]
+    return {
+        "items": entries,
+        "total": total,
+        "dataSource": "live",
+    }
+
+
 def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
+    changes: List[str] = []
     timezone_value = payload.get("timezone")
     if timezone_value is not None:
         timezone_clean = timezone_value.strip() or "Asia/Tehran"
         set_setting(TIMEZONE_KEY, timezone_clean)
+        changes.append("منطقه زمانی")
 
     weekly = payload.get("weekly")
     if weekly is not None:
@@ -593,6 +672,7 @@ def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
         if friday:
             is_closed = not (friday.get("open") and friday.get("close"))
             set_setting("disable_friday", "true" if is_closed else "false")
+        changes.append("ساعات کاری")
 
     platforms = payload.get("platforms")
     if isinstance(platforms, dict):
@@ -605,6 +685,7 @@ def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
             runtime.apply_platform_states(effective, active=active)
         except Exception:
             LOGGER.debug("Skipping runtime platform sync due to runtime error.", exc_info=True)
+        changes.append("پلتفرم‌ها")
 
     if "lunchBreak" in payload:
         lunch_break = payload.get("lunchBreak") or {}
@@ -614,6 +695,7 @@ def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
         end = _normalize_time(lunch_break.get("end"), "پایان ناهار")
         set_setting(LUNCH_START_KEY, start)
         set_setting(LUNCH_END_KEY, end)
+        changes.append("استراحت ناهار")
 
     if "queryLimit" in payload:
         limit_value = payload.get("queryLimit")
@@ -627,6 +709,7 @@ def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
             if limit_int < 0:
                 raise ControlPanelError("محدودیت استعلام نمی‌تواند منفی باشد.")
             set_setting(QUERY_LIMIT_KEY, str(limit_int))
+        changes.append("محدودیت استعلام")
 
     if "deliveryInfo" in payload:
         delivery_info = payload.get("deliveryInfo") or {}
@@ -640,6 +723,15 @@ def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
         set_setting(DELIVERY_BEFORE_KEY, before_text)
         set_setting(DELIVERY_AFTER_KEY, after_text)
         set_setting(CHANGEOVER_KEY, changeover_value)
+        changes.append("اطلاعات تحویل")
+
+    if changes:
+        unique_changes = []
+        for item in changes:
+            if item not in unique_changes:
+                unique_changes.append(item)
+        details = "، ".join(unique_changes)
+        _append_audit_event("به‌روزرسانی تنظیمات", details=details)
 
     return get_settings()
 
@@ -652,6 +744,10 @@ def toggle_bot(active: bool) -> Dict[str, Any]:
     except Exception:
         LOGGER.debug("Skipping runtime platform sync due to runtime error.", exc_info=True)
     status = _build_status_snapshot()
+    _append_audit_event(
+        "تغییر وضعیت ربات",
+        details="فعال" if active else "غیرفعال",
+    )
     return status
 
 
@@ -673,6 +769,7 @@ def invalidate_cache() -> Dict[str, Any]:
 
     timestamp = _now_iso()
     set_setting(CACHE_KEY, timestamp)
+    _append_audit_event("به‌روزرسانی کش کالا", details=timestamp)
     return {"lastUpdatedISO": timestamp}
 
 

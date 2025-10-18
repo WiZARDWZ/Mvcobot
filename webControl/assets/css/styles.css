@@ -223,6 +223,12 @@ textarea:focus-visible {
   font-weight: 600;
 }
 
+.section-heading__subtitle {
+  margin: 4px 0 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
 .section-heading__meta {
   color: var(--color-text-muted);
   font-size: 13px;
@@ -409,6 +415,17 @@ tbody tr:nth-of-type(odd) {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.log-time {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.log-time__meta {
+  font-size: 12px;
+  color: var(--color-text-muted);
 }
 
 .badge {

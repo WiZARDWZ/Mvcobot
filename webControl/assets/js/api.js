@@ -150,6 +150,29 @@ const mockStore = {
     },
     dataSource: 'fallback',
   },
+  auditLog: [
+    {
+      id: 'log-1',
+      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
+      message: 'به‌روزرسانی تنظیمات',
+      details: 'ساعات کاری، پلتفرم‌ها',
+      actor: 'کنترل‌پنل',
+    },
+    {
+      id: 'log-2',
+      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 6).toISOString(),
+      message: 'تغییر وضعیت ربات',
+      details: 'فعال',
+      actor: 'کنترل‌پنل',
+    },
+    {
+      id: 'log-3',
+      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 12).toISOString(),
+      message: 'به‌روزرسانی کش کالا',
+      details: 'نمونه',
+      actor: 'کنترل‌پنل',
+    },
+  ],
 };
 
 const delay = (ms = 360) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -250,6 +273,21 @@ function ensureId(prefix) {
   return `${prefix}-${Math.random().toString(16).slice(2)}-${Date.now()}`;
 }
 
+function pushMockAudit(message, details) {
+  const entry = {
+    id: ensureId('log'),
+    timestamp: new Date().toISOString(),
+    message,
+    actor: 'کنترل‌پنل',
+  };
+  if (details) {
+    entry.details = details;
+  }
+  mockStore.auditLog.unshift(entry);
+  mockStore.auditLog = mockStore.auditLog.slice(0, 50);
+  return entry;
+}
+
 export const api = {
   async getMetrics() {
     const result = await runWithFallback(
@@ -284,6 +322,7 @@ export const api = {
         ...payload,
       };
       mockStore.commands.unshift(item);
+      pushMockAudit('ثبت دستور جدید', `${item.command} (شناسه ${item.id})`);
       return item;
     };
 
@@ -299,6 +338,7 @@ export const api = {
       const index = mockStore.commands.findIndex((item) => item.id === id);
       if (index === -1) throw new Error('دستور یافت نشد');
       mockStore.commands[index] = { ...mockStore.commands[index], ...payload };
+      pushMockAudit('ویرایش دستور', `${mockStore.commands[index].command} (شناسه ${id})`);
       return mockStore.commands[index];
     };
 
@@ -312,6 +352,7 @@ export const api = {
   async deleteCommand(id) {
     const mockHandler = () => {
       mockStore.commands = mockStore.commands.filter((item) => item.id !== id);
+      pushMockAudit('حذف دستور', `شناسه ${id}`);
       return { success: true };
     };
 
@@ -338,6 +379,7 @@ export const api = {
         ...payload,
       };
       mockStore.blocklist.unshift(item);
+      pushMockAudit('افزودن به لیست مسدود', payload.userId || payload.phoneOrUser);
       return item;
     };
 
@@ -351,6 +393,7 @@ export const api = {
   async removeBlockItem(id) {
     const mockHandler = () => {
       mockStore.blocklist = mockStore.blocklist.filter((item) => item.id !== id);
+      pushMockAudit('حذف از لیست مسدود', `شناسه ${id}`);
       return { success: true };
     };
 
@@ -426,6 +469,17 @@ export const api = {
           changeover: payload.deliveryInfo.changeover ?? null,
         };
       }
+      const touched = [];
+      if (payload.timezone || payload.weekly) touched.push('ساعات کاری');
+      if (payload.platforms) touched.push('پلتفرم‌ها');
+      if (payload.lunchBreak) touched.push('استراحت ناهار');
+      if (Object.prototype.hasOwnProperty.call(payload, 'queryLimit'))
+        touched.push('محدودیت استعلام');
+      if (payload.deliveryInfo) touched.push('اطلاعات تحویل');
+      if (touched.length) {
+        const summary = [...new Set(touched)].join('، ');
+        pushMockAudit('به‌روزرسانی تنظیمات', summary);
+      }
       return mockStore.settings;
     };
 
@@ -446,6 +500,7 @@ export const api = {
       mockStore.metrics.status.message = active
         ? 'ربات فعال و آماده پاسخ‌گویی است.'
         : 'ربات غیرفعال است.';
+      pushMockAudit('تغییر وضعیت ربات', active ? 'فعال' : 'غیرفعال');
       return mockStore.metrics.status;
     };
 
@@ -460,6 +515,7 @@ export const api = {
     const mockHandler = () => {
       const now = new Date().toISOString();
       mockStore.metrics.cache.lastUpdatedISO = now;
+      pushMockAudit('به‌روزرسانی کش کالا', now);
       return { lastUpdatedISO: now };
     };
 
@@ -468,5 +524,21 @@ export const api = {
       () => request('/api/v1/cache/invalidate', { method: 'POST' }),
       mockHandler
     );
+  },
+
+  async getAuditLog() {
+    const result = await runWithFallback(
+      'getAuditLog',
+      () => request('/api/v1/audit-log'),
+      () => ({
+        items: mockStore.auditLog,
+        total: mockStore.auditLog.length,
+        dataSource: 'fallback',
+      })
+    );
+    if (isMockMode() || result?.dataSource === 'fallback') {
+      emitFallback({ method: 'getAuditLog', reason: 'usingFallback' });
+    }
+    return result;
   },
 };
