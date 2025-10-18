@@ -199,7 +199,6 @@ def save_working_hours_entries(entries: Iterable[Dict[str, Any]]) -> None:
                 open_value,
                 close_value,
                 closed_flag,
-                day,
                 open_value,
                 close_value,
                 closed_flag,
