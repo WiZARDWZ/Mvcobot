@@ -6,9 +6,14 @@ from telegram import Update, InputFile
 from telegram.ext import ContextTypes
 
 from database.connector_bot import (
-    set_setting, get_setting,
-    add_to_blacklist, remove_from_blacklist,
-    get_blacklist, fetch_logs
+    add_to_blacklist,
+    fetch_logs,
+    fetch_working_hours_entries,
+    get_blacklist,
+    get_setting,
+    remove_from_blacklist,
+    save_working_hours_entries,
+    set_setting,
 )
 from handlers.inventory import refresh_inventory_cache_once
 
@@ -19,6 +24,30 @@ _TEHRAN = ZoneInfo("Asia/Tehran")
 # authorization
 def is_authorized(chat_id):
     return chat_id == ADMIN_GROUP_ID
+
+
+def _current_hours_map():
+    try:
+        entries = fetch_working_hours_entries()
+    except Exception:
+        entries = []
+    hours = {}
+    for item in entries:
+        try:
+            day = int(item.get("day"))
+        except Exception:
+            continue
+        hours[day] = {
+            "day": day,
+            "open": item.get("open"),
+            "close": item.get("close"),
+            "closed": item.get("closed"),
+        }
+    return hours
+
+
+def _persist_hours_map(hours_map):
+    save_working_hours_entries(hours_map.values())
 
 
 # 1. disable bot
@@ -85,9 +114,18 @@ async def set_hours(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         parts = {k: v for k, v in (p.split("=") for p in context.args)}
-        set_setting("working_start", parts["start"])
-        set_setting("working_end", parts["end"])
-        await update.message.reply_text(f"⏲️ ساعات کاری: {parts['start']} تا {parts['end']}")
+        start = parts["start"].strip()
+        end = parts["end"].strip()
+        hours = _current_hours_map()
+        for day in (0, 1, 2, 5, 6):  # Mon, Tue, Wed, Sat, Sun
+            hours[day] = {"day": day, "open": start, "close": end, "closed": False}
+        friday_entry = hours.get(4)
+        if friday_entry and not friday_entry.get("closed"):
+            hours[4] = {"day": 4, "open": start, "close": end, "closed": False}
+        _persist_hours_map(hours)
+        set_setting("working_start", start)
+        set_setting("working_end", end)
+        await update.message.reply_text(f"⏲️ ساعات کاری: {start} تا {end}")
     except Exception:
         # English error text to avoid garbling
         await update.message.reply_text("Format: /set_hours start=08:00 end=18:00")
@@ -99,9 +137,14 @@ async def set_thursday(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         parts = {k: v for k, v in (p.split("=") for p in context.args)}
-        set_setting("thursday_start", parts["start"])
-        set_setting("thursday_end", parts["end"])
-        await update.message.reply_text(f"📅 پنج‌شنبه: {parts['start']} تا {parts['end']}")
+        start = parts["start"].strip()
+        end = parts["end"].strip()
+        hours = _current_hours_map()
+        hours[3] = {"day": 3, "open": start, "close": end, "closed": False}
+        _persist_hours_map(hours)
+        set_setting("thursday_start", start)
+        set_setting("thursday_end", end)
+        await update.message.reply_text(f"📅 پنج‌شنبه: {start} تا {end}")
     except Exception:
         await update.message.reply_text("Format: /set_thursday start=08:00 end=14:00")
 
@@ -110,6 +153,9 @@ async def set_thursday(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def disable_friday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_chat.id):
         return
+    hours = _current_hours_map()
+    hours[4] = {"day": 4, "open": None, "close": None, "closed": True}
+    _persist_hours_map(hours)
     set_setting("disable_friday", "true")
     await update.message.reply_text("🚫 ربات در جمعه‌ها غیرفعال شد.")
 
@@ -118,6 +164,12 @@ async def disable_friday(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def enable_friday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_chat.id):
         return
+    hours = _current_hours_map()
+    fallback = hours.get(0) or hours.get(6) or {"open": "09:00", "close": "18:00"}
+    start = (fallback.get("open") or "09:00").strip()
+    end = (fallback.get("close") or "18:00").strip()
+    hours[4] = {"day": 4, "open": start, "close": end, "closed": False}
+    _persist_hours_map(hours)
     set_setting("disable_friday", "false")
     await update.message.reply_text("✅ ربات در جمعه‌ها فعال شد.")
 
