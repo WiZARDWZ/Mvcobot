@@ -1,6 +1,6 @@
 import json
 from datetime import time
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pyodbc
 from config import BOT_DB_CONFIG
