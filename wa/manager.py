@@ -108,6 +108,13 @@ class WAController:
     def set_changeover_hour(self, hhmm: str): self._state.changeover_hhmm = hhmm
     def set_delivery_before(self, text: str): self._state.delivery_before = text
     def set_delivery_after(self, text: str): self._state.delivery_after = text
+    def refresh_working_hours(self):
+        bot = self._state.bot
+        if bot and hasattr(bot, "refresh_working_hours"):
+            try:
+                bot.refresh_working_hours()
+            except Exception as exc:
+                log.warning("WA: refresh_working_hours failed: %s", exc)
 
     def status_text(self) -> str:
         s = self._state

@@ -422,6 +422,28 @@ class WAWebBot:
                 self._hours_loaded_at = now
         return self._hours
 
+    def refresh_working_hours(self) -> None:
+        """Force the cached working-hours snapshot to reload on next access."""
+        self._hours = None
+        self._hours_loaded_at = 0.0
+        try:
+            cache = self._hours_cached()
+            weekly = cache.get("weekly", {}) if isinstance(cache, dict) else {}
+            segments = []
+            for day in _DAY_ORDER:
+                slot = weekly.get(day)
+                label = _DAY_NAMES.get(day, str(day))
+                if slot:
+                    segments.append(
+                        f"{label} {slot[0].strftime('%H:%M')}-{slot[1].strftime('%H:%M')}"
+                    )
+                else:
+                    segments.append(f"{label} تعطیل")
+            if segments:
+                self.dlog("working-hours refreshed: " + " | ".join(segments))
+        except Exception as exc:
+            self.dlog(f"working-hours refresh failed: {exc!r}")
+
     # ---------- lifecycle ----------
     async def start(self) -> None:
         self._pw = await async_playwright().start()

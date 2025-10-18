@@ -125,16 +125,28 @@ def _load_weekly_hours_schedule() -> Dict[int, Tuple[time, time]]:
 
 
 def _format_weekly_schedule_lines(weekly: Dict[int, Tuple[time, time]]) -> str:
-    lines = []
-    for day in _WEEKLY_DAY_ORDER:
-        label = _DAY_LABELS.get(day, str(day))
-        slot = weekly.get(day)
-        if slot:
-            lines.append(
-                f"  • {label}: {slot[0].strftime('%H:%M')} تا {slot[1].strftime('%H:%M')}"
-            )
-        else:
-            lines.append(f"  • {label}: تعطیل")
+    def _fmt_slot(slot: Optional[Tuple[time, time]]) -> Optional[str]:
+        if not slot:
+            return None
+        return f"{slot[0].strftime('%H:%M')} تا {slot[1].strftime('%H:%M')}"
+
+    lines: List[str] = []
+
+    sat_slot = weekly.get(5)
+    sat_text = _fmt_slot(sat_slot)
+    if sat_text:
+        lines.append(f"  • شنبه تا چهارشنبه: {sat_text}")
+    else:
+        lines.append("  • شنبه تا چهارشنبه: تعطیل")
+
+    thu_slot = weekly.get(3)
+    thu_text = _fmt_slot(thu_slot)
+    lines.append(f"  • پنج‌شنبه: {thu_text if thu_text else 'تعطیل'}")
+
+    fri_slot = weekly.get(4)
+    fri_text = _fmt_slot(fri_slot)
+    lines.append(f"  • جمعه: {fri_text if fri_text else 'تعطیل'}")
+
     return "\n".join(lines)
 
 

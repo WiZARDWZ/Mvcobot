@@ -87,3 +87,13 @@ def apply_platform_states(platforms: Dict[str, bool], *, active: bool) -> None:
     """Apply platform enablement flags to the running services."""
     whatsapp_enabled = bool(platforms.get("whatsapp", True)) and active
     _apply_whatsapp_state(whatsapp_enabled)
+
+
+def refresh_working_hours_cache() -> None:
+    """Ask the WhatsApp controller to reload working-hour settings."""
+    if wa_controller is None:
+        return
+    try:
+        wa_controller.refresh_working_hours()
+    except Exception as exc:  # pragma: no cover - best-effort refresh
+        LOGGER.debug("Skipping WhatsApp working-hours refresh: %s", exc)

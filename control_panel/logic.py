@@ -596,29 +596,6 @@ def _build_status_snapshot() -> Dict[str, Any]:
     }
 
 
-def _build_weekly_schedule() -> List[Dict[str, Any]]:
-    weekly: List[Dict[str, Any]] = []
-    general_open = get_setting("working_start") or "08:00"
-    general_close = get_setting("working_end") or "18:00"
-    th_open = get_setting("thursday_start") or general_open
-    th_close = get_setting("thursday_end") or general_close
-    friday_disabled = (get_setting("disable_friday") or "true").lower() == "true"
-
-    for day in range(7):
-        if day == 4:  # پنج‌شنبه
-            open_time = th_open if th_open.strip() else None
-            close_time = th_close if th_close.strip() else None
-        elif day == 5:  # جمعه
-            open_time = None if friday_disabled else general_open
-            close_time = None if friday_disabled else general_close
-        else:
-            open_time = general_open if general_open.strip() else None
-            close_time = general_close if general_close.strip() else None
-
-        weekly.append({"day": day, "open": open_time, "close": close_time})
-    return weekly
-
-
 def get_metrics() -> Dict[str, Any]:
     metrics = _aggregate_metrics_from_db()
     return {
@@ -835,6 +812,10 @@ def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
             _sync_legacy_working_settings(current.values())
         except Exception:
             LOGGER.debug("Failed to sync legacy working hour settings", exc_info=True)
+        try:
+            runtime.refresh_working_hours_cache()
+        except Exception:
+            LOGGER.debug("Failed to refresh runtime working hours cache", exc_info=True)
         changes.append("ساعات کاری")
 
     platforms = payload.get("platforms")
