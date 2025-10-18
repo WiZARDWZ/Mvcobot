@@ -260,12 +260,30 @@ export function createToolbar({ title, actions = [], search }) {
 
 export function renderWorkingHoursList(workingHours) {
   const list = createElement('ul', { classes: ['list-inline'] });
-  const days = ['یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه', 'شنبه'];
-  workingHours?.weekly?.forEach((item) => {
+  const order = [5, 6, 0, 1, 2, 3, 4];
+  const dayNames = {
+    0: 'دوشنبه',
+    1: 'سه‌شنبه',
+    2: 'چهارشنبه',
+    3: 'پنجشنبه',
+    4: 'جمعه',
+    5: 'شنبه',
+    6: 'یکشنبه',
+  };
+  const weekly = Array.isArray(workingHours?.weekly) ? [...workingHours.weekly] : [];
+  weekly.sort((a, b) => {
+    const aIndex = order.indexOf(a.day);
+    const bIndex = order.indexOf(b.day);
+    const safeA = aIndex === -1 ? order.length : aIndex;
+    const safeB = bIndex === -1 ? order.length : bIndex;
+    return safeA - safeB;
+  });
+  weekly.forEach((item) => {
+    const dayName = dayNames[item.day] || `روز ${item.day}`;
     const text =
       item.open && item.close
-        ? `${days[item.day]}: ${item.open} – ${item.close}`
-        : `${days[item.day]}: تعطیل`;
+        ? `${dayName}: ${item.open} – ${item.close}`
+        : `${dayName}: تعطیل`;
     list.appendChild(createElement('li', { text }));
   });
   return list;

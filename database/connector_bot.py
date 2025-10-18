@@ -1,6 +1,8 @@
+import json
+from datetime import time
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
 import pyodbc
-from datetime import datetime
-from typing import Optional, List
 from config import BOT_DB_CONFIG
 
 # def get_connection():
@@ -11,6 +13,19 @@ from config import BOT_DB_CONFIG
 #         f"Trusted_Connection={BOT_DB_CONFIG.get('trusted_connection','no')};"
 #     )
 #     return pyodbc.connect(conn_str, timeout=30)
+_TABLES_ENSURED = False
+
+_DEFAULT_WORKING_HOURS: List[Dict[str, Any]] = [
+    {"day": 0, "open": "09:00", "close": "18:00", "closed": False},  # Monday
+    {"day": 1, "open": "09:00", "close": "18:00", "closed": False},  # Tuesday
+    {"day": 2, "open": "09:00", "close": "18:00", "closed": False},  # Wednesday
+    {"day": 3, "open": "09:00", "close": "18:00", "closed": False},  # Thursday
+    {"day": 4, "open": None, "close": None, "closed": True},            # Friday (closed)
+    {"day": 5, "open": "09:00", "close": "18:00", "closed": False},  # Saturday
+    {"day": 6, "open": "09:00", "close": "18:00", "closed": False},  # Sunday
+]
+
+
 def get_connection():
     conn_str = (
         f"DRIVER={BOT_DB_CONFIG['driver']};"
@@ -20,6 +35,176 @@ def get_connection():
         f"PWD={BOT_DB_CONFIG['password']};"
     )
     return pyodbc.connect(conn_str, timeout=30)
+
+
+def _ensure_tables(cur) -> None:
+    cur.execute(
+        """
+        IF OBJECT_ID('control_panel_audit_log', 'U') IS NULL
+        BEGIN
+            CREATE TABLE control_panel_audit_log (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                [timestamp] DATETIME NOT NULL DEFAULT (GETDATE()),
+                actor NVARCHAR(100) NULL,
+                message NVARCHAR(500) NOT NULL,
+                details NVARCHAR(MAX) NULL
+            );
+            CREATE INDEX IX_control_panel_audit_log_timestamp
+                ON control_panel_audit_log([timestamp]);
+        END;
+        IF OBJECT_ID('whatsapp_message_log', 'U') IS NULL
+        BEGIN
+            CREATE TABLE whatsapp_message_log (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                chat_identifier NVARCHAR(255) NULL,
+                direction NVARCHAR(20) NOT NULL,
+                [text] NVARCHAR(MAX) NULL,
+                [timestamp] DATETIME NOT NULL DEFAULT (GETDATE())
+            );
+            CREATE INDEX IX_whatsapp_message_log_timestamp
+                ON whatsapp_message_log([timestamp]);
+        END;
+        IF OBJECT_ID('control_panel_working_hours', 'U') IS NULL
+        BEGIN
+            CREATE TABLE control_panel_working_hours (
+                day_of_week INT NOT NULL PRIMARY KEY,
+                open_time TIME NULL,
+                close_time TIME NULL,
+                is_closed BIT NOT NULL DEFAULT (0),
+                updated_at DATETIME NOT NULL DEFAULT (GETDATE())
+            );
+        END;
+        WITH required AS (
+            SELECT *
+            FROM (VALUES
+                (0, '09:00', '18:00', 0),
+                (1, '09:00', '18:00', 0),
+                (2, '09:00', '18:00', 0),
+                (3, '09:00', '18:00', 0),
+                (4, NULL,    NULL,    1),
+                (5, '09:00', '18:00', 0),
+                (6, '09:00', '18:00', 0)
+            ) AS defaults(day_of_week, open_time, close_time, is_closed)
+        )
+        MERGE control_panel_working_hours AS target
+        USING required AS src
+            ON target.day_of_week = src.day_of_week
+        WHEN NOT MATCHED THEN
+            INSERT (day_of_week, open_time, close_time, is_closed, updated_at)
+            VALUES (src.day_of_week, src.open_time, src.close_time, src.is_closed, GETDATE());
+        """
+    )
+
+
+def ensure_control_panel_tables() -> bool:
+    """Create audit/log tables when missing. Returns True on success."""
+
+    global _TABLES_ENSURED
+    if _TABLES_ENSURED:
+        return True
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            _ensure_tables(cur)
+            conn.commit()
+        _TABLES_ENSURED = True
+        return True
+    except Exception as e:
+        print("❌ خطا در ensure_control_panel_tables:", e)
+        _TABLES_ENSURED = False
+        return False
+
+
+def _format_time_value(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, time):
+        return value.strftime("%H:%M")
+    text = str(value).strip()
+    if not text:
+        return None
+    if len(text) >= 5 and ":" in text:
+        return text[:5]
+    return text
+
+
+def fetch_working_hours_entries() -> List[Dict[str, Any]]:
+    if not ensure_control_panel_tables():
+        raise RuntimeError("control panel tables are unavailable")
+
+    query = """
+        SELECT day_of_week, open_time, close_time, is_closed
+        FROM control_panel_working_hours
+    """
+
+    entries: List[Dict[str, Any]] = []
+    with get_connection() as conn:
+        cur = conn.cursor()
+        rows = cur.execute(query).fetchall()
+    for row in rows:
+        day = int(row[0])
+        open_value = _format_time_value(row[1])
+        close_value = _format_time_value(row[2])
+        is_closed = bool(row[3])
+        if is_closed:
+            open_value = None
+            close_value = None
+        entries.append({
+            "day": day,
+            "open": open_value,
+            "close": close_value,
+            "closed": is_closed,
+        })
+    if not entries:
+        return [dict(item) for item in _DEFAULT_WORKING_HOURS]
+    return entries
+
+
+def save_working_hours_entries(entries: Iterable[Dict[str, Any]]) -> None:
+    if not ensure_control_panel_tables():
+        raise RuntimeError("control panel tables are unavailable")
+
+    sql = """
+        MERGE control_panel_working_hours AS target
+        USING (SELECT ? AS day_of_week) AS src
+            ON target.day_of_week = src.day_of_week
+        WHEN MATCHED THEN
+            UPDATE SET
+                open_time = ?,
+                close_time = ?,
+                is_closed = ?,
+                updated_at = GETDATE()
+        WHEN NOT MATCHED THEN
+            INSERT (day_of_week, open_time, close_time, is_closed, updated_at)
+            VALUES (src.day_of_week, ?, ?, ?, GETDATE());
+    """
+
+    payload = []
+    for item in entries:
+        day = int(item.get("day"))
+        open_value = _format_time_value(item.get("open"))
+        close_value = _format_time_value(item.get("close"))
+        closed = bool(item.get("closed")) or not (open_value and close_value)
+        if closed:
+            open_value = None
+            close_value = None
+        payload.append((day, open_value, close_value, 1 if closed else 0))
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        for day, open_value, close_value, closed_flag in payload:
+            cur.execute(
+                sql,
+                day,
+                open_value,
+                close_value,
+                closed_flag,
+                day,
+                open_value,
+                close_value,
+                closed_flag,
+            )
+        conn.commit()
 def log_message(user_id, chat_id, direction, text):
     try:
         uid = int(user_id)
@@ -39,6 +224,101 @@ def log_message(user_id, chat_id, direction, text):
             conn.commit()
     except Exception as e:
         print("❌ خطا در log_message:", e)
+
+
+def log_whatsapp_message(chat_identifier: Optional[str], direction: str, text: str) -> None:
+    direction = str(direction or "out")
+    chat_value = None if chat_identifier is None else str(chat_identifier)[:255]
+    payload = str(text or "")
+    if not ensure_control_panel_tables():
+        return
+    query = """
+        INSERT INTO whatsapp_message_log (chat_identifier, direction, [text], [timestamp])
+        VALUES (?, ?, ?, GETDATE())
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query, chat_value, direction, payload)
+            conn.commit()
+    except Exception as e:
+        print("❌ خطا در log_whatsapp_message:", e)
+
+
+def _serialize_details(details: Any) -> Optional[str]:
+    if details is None:
+        return None
+    if isinstance(details, str):
+        return details
+    try:
+        return json.dumps(details, ensure_ascii=False)
+    except Exception:
+        return str(details)
+
+
+def record_audit_event(message: str, *, actor: str = "کنترل‌پنل", details: Any = None) -> None:
+    if not ensure_control_panel_tables():
+        raise RuntimeError("control panel tables are unavailable")
+    msg = str(message or "").strip()
+    if not msg:
+        raise ValueError("message is required")
+    actor_value = str(actor or "کنترل‌پنل")[:100]
+    details_value = _serialize_details(details)
+    query = """
+        INSERT INTO control_panel_audit_log ([timestamp], actor, message, details)
+        VALUES (GETDATE(), ?, ?, ?)
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(query, actor_value, msg[:500], details_value)
+        conn.commit()
+
+
+def fetch_audit_log_entries(limit: int = 200) -> Tuple[List[dict], int]:
+    if not ensure_control_panel_tables():
+        raise RuntimeError("control panel tables are unavailable")
+    limit = max(1, min(limit, 500))
+    query = f"""
+        SELECT TOP {limit}
+            id,
+            [timestamp],
+            actor,
+            message,
+            details
+        FROM control_panel_audit_log
+        ORDER BY [timestamp] DESC, id DESC
+    """
+    count_query = "SELECT COUNT(*) FROM control_panel_audit_log"
+    entries: List[dict] = []
+    with get_connection() as conn:
+        cur = conn.cursor()
+        rows = cur.execute(query).fetchall()
+        total_row = cur.execute(count_query).fetchone()
+    total = int(total_row[0]) if total_row else 0
+    for row in rows:
+        ts = row[1]
+        if hasattr(ts, "isoformat"):
+            ts_iso = ts.isoformat()
+        else:
+            ts_iso = str(ts)
+        details_raw = row[4]
+        parsed_details: Any = None
+        if details_raw not in (None, ""):
+            try:
+                parsed_details = json.loads(details_raw)
+            except Exception:
+                parsed_details = details_raw
+        entry = {
+            "id": f"log-{row[0]}",
+            "timestamp": ts_iso,
+            "message": row[3],
+        }
+        if row[2]:
+            entry["actor"] = row[2]
+        if parsed_details not in (None, ""):
+            entry["details"] = parsed_details
+        entries.append(entry)
+    return entries, total
 
 def get_setting(key) -> Optional[str]:
     k = str(key)

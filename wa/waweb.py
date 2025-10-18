@@ -19,7 +19,11 @@ from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 from playwright.async_api import TimeoutError as PWTimeout
 from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
-from database.connector_bot import get_setting
+from database.connector_bot import (
+    fetch_working_hours_entries,
+    get_setting,
+    log_whatsapp_message,
+)
 
 DB_DOWN_MESSAGE = (
     "دسترسی به دیتابیس قطع میباشد , در حال بررسی مشکل هستیم\n"
@@ -254,6 +258,16 @@ def notify_admin(text: str) -> None:
 
 # ===== working-hours (DB) =====
 _TEHRAN = ZoneInfo("Asia/Tehran")
+_DAY_ORDER = [5, 6, 0, 1, 2, 3, 4]
+_DAY_NAMES = {
+    0: "دوشنبه",
+    1: "سه‌شنبه",
+    2: "چهارشنبه",
+    3: "پنجشنبه",
+    4: "جمعه",
+    5: "شنبه",
+    6: "یکشنبه",
+}
 
 def _parse_hhmm_safe(val: str, fallback: str) -> dtime:
     try:
@@ -261,25 +275,58 @@ def _parse_hhmm_safe(val: str, fallback: str) -> dtime:
     except Exception:
         return datetime.strptime(fallback, "%H:%M").time()
 
+
 def _load_working_hours_from_db() -> dict:
-    wk_start = _parse_hhmm_safe(get_setting("working_start"), "08:00")
-    wk_end   = _parse_hhmm_safe(get_setting("working_end"),   "18:00")
-    th_start = _parse_hhmm_safe(get_setting("thursday_start"), "08:00")
-    th_end   = _parse_hhmm_safe(get_setting("thursday_end"),   "12:30")
+    weekly: Dict[int, Tuple[dtime, dtime]] = {}
+    try:
+        entries = fetch_working_hours_entries()
+    except Exception:
+        entries = []
+
+    for entry in entries:
+        if entry.get("closed"):
+            continue
+        open_raw = entry.get("open")
+        close_raw = entry.get("close")
+        if not (open_raw and close_raw):
+            continue
+        try:
+            open_time = datetime.strptime(open_raw, "%H:%M").time()
+            close_time = datetime.strptime(close_raw, "%H:%M").time()
+        except Exception:
+            continue
+        weekly[int(entry.get("day", -1))] = (open_time, close_time)
+
+    if weekly:
+        return {"weekly": weekly, "source": "db"}
+
+    # Legacy fallback
+    wk_start = _parse_hhmm_safe(get_setting("working_start"), "09:00")
+    wk_end = _parse_hhmm_safe(get_setting("working_end"), "18:00")
+    th_start = _parse_hhmm_safe(get_setting("thursday_start"), wk_start.strftime("%H:%M"))
+    th_end = _parse_hhmm_safe(get_setting("thursday_end"), wk_end.strftime("%H:%M"))
     disable_friday = (get_setting("disable_friday") or "true").strip().lower() == "true"
-    return {
-        "wk_start": wk_start, "wk_end": wk_end,
-        "th_start": th_start, "th_end": th_end,
-        "disable_friday": disable_friday,
-    }
+
+    legacy: Dict[int, Tuple[dtime, dtime]] = {}
+    for day in range(7):
+        if day == 3:
+            legacy[day] = (th_start, th_end)
+        elif day == 4:
+            if not disable_friday:
+                legacy[day] = (wk_start, wk_end)
+        else:
+            legacy[day] = (wk_start, wk_end)
+    return {"weekly": legacy, "source": "legacy"}
+
 
 def _within_hours_tehran(now_dt: datetime, wh: dict) -> bool:
-    wd, t = now_dt.weekday(), now_dt.time()
-    if wd == 4:  # Friday
-        return (not wh["disable_friday"]) and (wh["wk_start"] <= t < wh["wk_end"])
-    if wd == 3:  # Thursday
-        return wh["th_start"] <= t < wh["th_end"]
-    return wh["wk_start"] <= t < wh["wk_end"]
+    weekly = wh.get("weekly") if isinstance(wh, dict) else {}
+    slot = weekly.get(now_dt.weekday())
+    if not slot:
+        return False
+    start_time, end_time = slot
+    t = now_dt.time()
+    return start_time <= t < end_time
 
 # ===== title normalize =====
 def _norm_title_key(title: str) -> str:
@@ -340,6 +387,13 @@ class WAWebBot:
         self._hours_loaded_at: float = 0.0
 
     def dlog(self, msg: str): self.log(f"[{_now()}] {self.cfg.debug_tag} | {msg}")
+
+    async def _log_outgoing_message(self, chat_identifier: Optional[str], body: str) -> None:
+        try:
+            await asyncio.to_thread(log_whatsapp_message, chat_identifier, "out", body)
+        except Exception as exc:
+            self.dlog(f"whatsapp log failed: {exc!r}")
+
     def set_interval(self, sec: float):
         try: self.cfg.idle_scan_interval_sec = max(2.0, float(sec))
         except Exception: pass
@@ -350,10 +404,18 @@ class WAWebBot:
             try:
                 self._hours = _load_working_hours_from_db()
                 self._hours_loaded_at = now
-                ws, we = self._hours["wk_start"].strftime("%H:%M"), self._hours["wk_end"].strftime("%H:%M")
-                ts, te = self._hours["th_start"].strftime("%H:%M"), self._hours["th_end"].strftime("%H:%M")
-                fri = "OFF" if self._hours["disable_friday"] else "ON"
-                self.dlog(f"working-hours synced: Sat-Wed {ws}-{we} | Thu {ts}-{te} | Fri {fri}")
+                weekly = self._hours.get("weekly", {})
+                segments = []
+                for day in _DAY_ORDER:
+                    slot = weekly.get(day)
+                    label = _DAY_NAMES.get(day, str(day))
+                    if slot:
+                        segments.append(
+                            f"{label} {slot[0].strftime('%H:%M')}-{slot[1].strftime('%H:%M')}"
+                        )
+                    else:
+                        segments.append(f"{label} تعطیل")
+                self.dlog("working-hours synced: " + " | ".join(segments))
             except Exception as e:
                 self.dlog(f"working-hours load failed: {e!r}")
                 self._hours = _load_working_hours_from_db()
@@ -1259,12 +1321,14 @@ class WAWebBot:
             after = await self._count_outgoing_bubbles()
             if after > before:
                 self.dlog(f"sent bubble confirmed {before}->{after}")
+                await self._log_outgoing_message(expected_header_title, body)
                 return True
 
         if body.strip() == "**":
             try:
                 if await self._composer_empty(tb):
                     self.dlog("composer empty after '**' -> treating as sent")
+                    await self._log_outgoing_message(expected_header_title, body)
                     return True
             except Exception:
                 pass
@@ -1280,6 +1344,7 @@ class WAWebBot:
                     after = await self._count_outgoing_bubbles()
                     if after > before:
                         self.dlog(f"sent bubble confirmed after click {before}->{after}")
+                        await self._log_outgoing_message(expected_header_title, body)
                         return True
             else: self.dlog("SEND button not found")
         except Exception as e:
