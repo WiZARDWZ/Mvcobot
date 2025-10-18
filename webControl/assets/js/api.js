@@ -15,13 +15,13 @@ const DEFAULT_FALLBACK_MESSAGE =
   'اتصال به پایگاه‌داده برقرار نیست؛ داده‌های نمونه نمایش داده می‌شوند.';
 
 const DEFAULT_WEEKLY_SCHEDULE = [
-  { day: 5, open: '09:00', close: '18:00' },
-  { day: 6, open: '09:00', close: '18:00' },
-  { day: 0, open: '09:00', close: '18:00' },
-  { day: 1, open: '09:00', close: '18:00' },
-  { day: 2, open: '09:00', close: '18:00' },
-  { day: 3, open: '09:00', close: '18:00' },
-  { day: 4, open: null, close: null },
+  { day: 5, open: '09:00', close: '18:00', closed: false },
+  { day: 6, open: '09:00', close: '18:00', closed: false },
+  { day: 0, open: '09:00', close: '18:00', closed: false },
+  { day: 1, open: '09:00', close: '18:00', closed: false },
+  { day: 2, open: '09:00', close: '18:00', closed: false },
+  { day: 3, open: '09:00', close: '18:00', closed: false },
+  { day: 4, open: null, close: null, closed: true },
 ];
 
 const seededRandom = (() => {

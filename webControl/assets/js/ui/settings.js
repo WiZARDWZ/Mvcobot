@@ -271,13 +271,16 @@ export async function mount(container) {
   function applySettings() {
     timezoneInput.value = settings.timezone ?? 'Asia/Tehran';
     dayControls.forEach((control) => {
-      const current = settings.weekly.find((item) => item.day === control.day) || {
-        open: null,
-        close: null,
-      };
+      const current =
+        settings.weekly.find((item) => Number(item.day) === control.day) || {
+          open: null,
+          close: null,
+          closed: true,
+        };
       control.openInput.value = current.open ?? '';
       control.closeInput.value = current.close ?? '';
-      control.closedCheckbox.checked = !current.open || !current.close;
+      const isClosed = current.closed === true || !current.open || !current.close;
+      control.closedCheckbox.checked = isClosed;
       control.updateDisabledState();
     });
 
@@ -303,6 +306,7 @@ export async function mount(container) {
     event.preventDefault();
     const weekly = dayControls.map((control) => ({
       day: control.day,
+      closed: control.closedCheckbox.checked,
       open: control.closedCheckbox.checked ? null : control.openInput.value || null,
       close: control.closedCheckbox.checked ? null : control.closeInput.value || null,
     }));
