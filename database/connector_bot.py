@@ -1,6 +1,8 @@
 import json
+from datetime import time
+from typing import Any, Dict, Iterable, List, Optional
+
 import pyodbc
-from typing import Optional, List, Tuple, Any
 from config import BOT_DB_CONFIG
 
 # def get_connection():
@@ -12,6 +14,16 @@ from config import BOT_DB_CONFIG
 #     )
 #     return pyodbc.connect(conn_str, timeout=30)
 _TABLES_ENSURED = False
+
+_DEFAULT_WORKING_HOURS: List[Dict[str, Any]] = [
+    {"day": 0, "open": "09:00", "close": "18:00", "closed": False},  # Monday
+    {"day": 1, "open": "09:00", "close": "18:00", "closed": False},  # Tuesday
+    {"day": 2, "open": "09:00", "close": "18:00", "closed": False},  # Wednesday
+    {"day": 3, "open": "09:00", "close": "18:00", "closed": False},  # Thursday
+    {"day": 4, "open": None, "close": None, "closed": True},            # Friday (closed)
+    {"day": 5, "open": "09:00", "close": "18:00", "closed": False},  # Saturday
+    {"day": 6, "open": "09:00", "close": "18:00", "closed": False},  # Sunday
+]
 
 
 def get_connection():
@@ -52,6 +64,34 @@ def _ensure_tables(cur) -> None:
             CREATE INDEX IX_whatsapp_message_log_timestamp
                 ON whatsapp_message_log([timestamp]);
         END;
+        IF OBJECT_ID('control_panel_working_hours', 'U') IS NULL
+        BEGIN
+            CREATE TABLE control_panel_working_hours (
+                day_of_week INT NOT NULL PRIMARY KEY,
+                open_time TIME NULL,
+                close_time TIME NULL,
+                is_closed BIT NOT NULL DEFAULT (0),
+                updated_at DATETIME NOT NULL DEFAULT (GETDATE())
+            );
+        END;
+        WITH required AS (
+            SELECT *
+            FROM (VALUES
+                (0, '09:00', '18:00', 0),
+                (1, '09:00', '18:00', 0),
+                (2, '09:00', '18:00', 0),
+                (3, '09:00', '18:00', 0),
+                (4, NULL,    NULL,    1),
+                (5, '09:00', '18:00', 0),
+                (6, '09:00', '18:00', 0)
+            ) AS defaults(day_of_week, open_time, close_time, is_closed)
+        )
+        MERGE control_panel_working_hours AS target
+        USING required AS src
+            ON target.day_of_week = src.day_of_week
+        WHEN NOT MATCHED THEN
+            INSERT (day_of_week, open_time, close_time, is_closed, updated_at)
+            VALUES (src.day_of_week, src.open_time, src.close_time, src.is_closed, GETDATE());
         """
     )
 
@@ -73,6 +113,98 @@ def ensure_control_panel_tables() -> bool:
         print("❌ خطا در ensure_control_panel_tables:", e)
         _TABLES_ENSURED = False
         return False
+
+
+def _format_time_value(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, time):
+        return value.strftime("%H:%M")
+    text = str(value).strip()
+    if not text:
+        return None
+    if len(text) >= 5 and ":" in text:
+        return text[:5]
+    return text
+
+
+def fetch_working_hours_entries() -> List[Dict[str, Any]]:
+    if not ensure_control_panel_tables():
+        raise RuntimeError("control panel tables are unavailable")
+
+    query = """
+        SELECT day_of_week, open_time, close_time, is_closed
+        FROM control_panel_working_hours
+    """
+
+    entries: List[Dict[str, Any]] = []
+    with get_connection() as conn:
+        cur = conn.cursor()
+        rows = cur.execute(query).fetchall()
+    for row in rows:
+        day = int(row[0])
+        open_value = _format_time_value(row[1])
+        close_value = _format_time_value(row[2])
+        is_closed = bool(row[3])
+        if is_closed:
+            open_value = None
+            close_value = None
+        entries.append({
+            "day": day,
+            "open": open_value,
+            "close": close_value,
+            "closed": is_closed,
+        })
+    if not entries:
+        return [dict(item) for item in _DEFAULT_WORKING_HOURS]
+    return entries
+
+
+def save_working_hours_entries(entries: Iterable[Dict[str, Any]]) -> None:
+    if not ensure_control_panel_tables():
+        raise RuntimeError("control panel tables are unavailable")
+
+    sql = """
+        MERGE control_panel_working_hours AS target
+        USING (SELECT ? AS day_of_week) AS src
+            ON target.day_of_week = src.day_of_week
+        WHEN MATCHED THEN
+            UPDATE SET
+                open_time = ?,
+                close_time = ?,
+                is_closed = ?,
+                updated_at = GETDATE()
+        WHEN NOT MATCHED THEN
+            INSERT (day_of_week, open_time, close_time, is_closed, updated_at)
+            VALUES (src.day_of_week, ?, ?, ?, GETDATE());
+    """
+
+    payload = []
+    for item in entries:
+        day = int(item.get("day"))
+        open_value = _format_time_value(item.get("open"))
+        close_value = _format_time_value(item.get("close"))
+        closed = bool(item.get("closed")) or not (open_value and close_value)
+        if closed:
+            open_value = None
+            close_value = None
+        payload.append((day, open_value, close_value, 1 if closed else 0))
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        for day, open_value, close_value, closed_flag in payload:
+            cur.execute(
+                sql,
+                day,
+                open_value,
+                close_value,
+                closed_flag,
+                day,
+                open_value,
+                close_value,
+                closed_flag,
+            )
+        conn.commit()
 def log_message(user_id, chat_id, direction, text):
     try:
         uid = int(user_id)

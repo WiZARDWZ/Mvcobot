@@ -11,9 +11,18 @@ const defaultConfig = {
   WHATSAPP_ENABLED: true,
 };
 
-const DAYS_IN_WEEK = 7;
 const DEFAULT_FALLBACK_MESSAGE =
   'اتصال به پایگاه‌داده برقرار نیست؛ داده‌های نمونه نمایش داده می‌شوند.';
+
+const DEFAULT_WEEKLY_SCHEDULE = [
+  { day: 5, open: '09:00', close: '18:00' },
+  { day: 6, open: '09:00', close: '18:00' },
+  { day: 0, open: '09:00', close: '18:00' },
+  { day: 1, open: '09:00', close: '18:00' },
+  { day: 2, open: '09:00', close: '18:00' },
+  { day: 3, open: '09:00', close: '18:00' },
+  { day: 4, open: null, close: null },
+];
 
 const seededRandom = (() => {
   let seed = 42;
@@ -71,11 +80,7 @@ const mockStore = {
       active: true,
       workingHours: {
         timezone: 'Asia/Tehran',
-        weekly: Array.from({ length: DAYS_IN_WEEK }).map((_, index) => ({
-          day: index,
-          open: index === 5 ? null : '09:00',
-          close: index === 5 ? null : '18:00',
-        })),
+        weekly: DEFAULT_WEEKLY_SCHEDULE.map((item) => ({ ...item })),
       },
       message: 'ربات فعال و آماده پاسخ‌گویی است.',
       operations: {
@@ -132,11 +137,7 @@ const mockStore = {
   ],
   settings: {
     timezone: 'Asia/Tehran',
-    weekly: Array.from({ length: DAYS_IN_WEEK }).map((_, index) => ({
-      day: index,
-      open: index === 5 ? null : '09:00',
-      close: index === 5 ? null : '18:00',
-    })),
+    weekly: DEFAULT_WEEKLY_SCHEDULE.map((item) => ({ ...item })),
     platforms: {
       telegram: defaultConfig.TELEGRAM_ENABLED,
       whatsapp: defaultConfig.WHATSAPP_ENABLED,

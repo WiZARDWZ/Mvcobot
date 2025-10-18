@@ -10,13 +10,13 @@ import {
 } from './components.js';
 
 const DAY_LABELS = [
-  { day: 0, label: 'یکشنبه' },
-  { day: 1, label: 'دوشنبه' },
-  { day: 2, label: 'سه‌شنبه' },
-  { day: 3, label: 'چهارشنبه' },
-  { day: 4, label: 'پنجشنبه' },
-  { day: 5, label: 'جمعه' },
-  { day: 6, label: 'شنبه' },
+  { day: 5, label: 'شنبه' },
+  { day: 6, label: 'یکشنبه' },
+  { day: 0, label: 'دوشنبه' },
+  { day: 1, label: 'سه‌شنبه' },
+  { day: 2, label: 'چهارشنبه' },
+  { day: 3, label: 'پنجشنبه' },
+  { day: 4, label: 'جمعه' },
 ];
 
 export async function mount(container) {

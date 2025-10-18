@@ -5,16 +5,18 @@ import logging
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from database.connector_bot import (
     add_to_blacklist,
     fetch_audit_log_entries,
+    fetch_working_hours_entries,
     get_blacklist,
     get_connection,
     get_setting,
     record_audit_event,
     remove_from_blacklist,
+    save_working_hours_entries,
     set_setting,
 )
 from handlers.inventory import refresh_inventory_cache_once
@@ -67,6 +69,8 @@ DELIVERY_BEFORE_KEY = "delivery_before"
 DELIVERY_AFTER_KEY = "delivery_after"
 CHANGEOVER_KEY = "changeover_hour"
 AUDIT_LOG_KEY = "panel_audit_log_v1"
+
+WORKING_DAY_ORDER = [5, 6, 0, 1, 2, 3, 4]  # Saturday → Friday (Python weekday numbering)
 
 MAX_AUDIT_LOG_ENTRIES = 200
 
@@ -411,6 +415,146 @@ def _merge_platform_flags(current: Dict[str, bool], overrides: Dict[str, Any]) -
     return merged
 
 
+def _order_weekly_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    order_map = {day: index for index, day in enumerate(WORKING_DAY_ORDER)}
+    return sorted(
+        items,
+        key=lambda item: order_map.get(int(item.get("day", -1)), len(WORKING_DAY_ORDER)),
+    )
+
+
+def _legacy_weekly_schedule() -> List[Dict[str, Any]]:
+    general_open = (get_setting("working_start") or "08:00").strip()
+    general_close = (get_setting("working_end") or "18:00").strip()
+    th_open = (get_setting("thursday_start") or general_open).strip()
+    th_close = (get_setting("thursday_end") or general_close).strip()
+    friday_disabled = (get_setting("disable_friday") or "true").lower() == "true"
+
+    legacy: List[Dict[str, Any]] = []
+    for day in WORKING_DAY_ORDER:
+        if day == 3:  # Thursday
+            open_time = th_open or None
+            close_time = th_close or None
+        elif day == 4:  # Friday
+            if friday_disabled:
+                open_time = None
+                close_time = None
+            else:
+                open_time = general_open or None
+                close_time = general_close or None
+        else:
+            open_time = general_open or None
+            close_time = general_close or None
+        legacy.append({"day": day, "open": open_time, "close": close_time})
+    return legacy
+
+
+def _build_weekly_schedule() -> List[Dict[str, Any]]:
+    try:
+        entries = fetch_working_hours_entries()
+    except Exception:
+        LOGGER.debug("Falling back to legacy working hours settings", exc_info=True)
+        return _order_weekly_items(_legacy_weekly_schedule())
+
+    weekly: List[Dict[str, Any]] = []
+    seen: set[int] = set()
+    for entry in entries:
+        try:
+            day = int(entry.get("day"))
+        except Exception:
+            continue
+        if day < 0 or day > 6 or day in seen:
+            continue
+        open_value = entry.get("open")
+        close_value = entry.get("close")
+        if entry.get("closed") or not (open_value and close_value):
+            open_value = None
+            close_value = None
+        weekly.append({"day": day, "open": open_value, "close": close_value})
+        seen.add(day)
+
+    if len(weekly) < len(WORKING_DAY_ORDER):
+        fallback_map = {item["day"]: item for item in _legacy_weekly_schedule()}
+        for day in WORKING_DAY_ORDER:
+            if day not in seen and day in fallback_map:
+                weekly.append(fallback_map[day])
+
+    return _order_weekly_items(weekly)
+
+
+def _normalize_weekly_payload(payload: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized: Dict[int, Dict[str, Any]] = {}
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        try:
+            day = int(item.get("day"))
+        except Exception:
+            raise ControlPanelError("شناسه روز نامعتبر است.")
+        if day < 0 or day > 6:
+            raise ControlPanelError("شناسه روز باید بین 0 و 6 باشد.")
+
+        open_raw = item.get("open")
+        close_raw = item.get("close")
+        if open_raw in (None, "") or close_raw in (None, ""):
+            normalized[day] = {"day": day, "open": None, "close": None, "closed": True}
+            continue
+
+        open_text = _normalize_time(open_raw, "شروع کار")
+        close_text = _normalize_time(close_raw, "پایان کار")
+        try:
+            open_time = datetime.strptime(open_text, "%H:%M").time()
+            close_time = datetime.strptime(close_text, "%H:%M").time()
+        except Exception:
+            raise ControlPanelError("ساعت وارد شده نامعتبر است.")
+        if open_time >= close_time:
+            raise ControlPanelError("ساعت پایان باید بعد از ساعت شروع باشد.")
+
+        normalized[day] = {
+            "day": day,
+            "open": open_text,
+            "close": close_text,
+            "closed": False,
+        }
+
+    if not normalized:
+        raise ControlPanelError("هیچ ساعتی برای ذخیره ارسال نشده است.")
+
+    return _order_weekly_items(list(normalized.values()))
+
+
+def _sync_legacy_working_settings(entries: Iterable[Dict[str, Any]]) -> None:
+    entries_map = {int(item["day"]): item for item in entries if "day" in item}
+    general_candidates = [0, 1, 2, 5, 6, 3]
+    general = next(
+        (
+            entries_map[day]
+            for day in general_candidates
+            if day in entries_map
+            and entries_map[day].get("open")
+            and entries_map[day].get("close")
+        ),
+        None,
+    )
+    if general:
+        set_setting("working_start", general.get("open") or "09:00")
+        set_setting("working_end", general.get("close") or "18:00")
+
+    thursday = entries_map.get(3)
+    if thursday and thursday.get("open") and thursday.get("close"):
+        set_setting("thursday_start", thursday.get("open") or "")
+        set_setting("thursday_end", thursday.get("close") or "")
+    else:
+        set_setting("thursday_start", "")
+        set_setting("thursday_end", "")
+
+    friday = entries_map.get(4)
+    if not friday or friday.get("closed") or not (friday.get("open") and friday.get("close")):
+        set_setting("disable_friday", "true")
+    else:
+        set_setting("disable_friday", "false")
+
+
 def _build_status_snapshot() -> Dict[str, Any]:
     enabled = _is_globally_enabled()
     weekly = _build_weekly_schedule()
@@ -672,26 +816,25 @@ def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(weekly, list):
             raise ControlPanelError("ساختار ساعات کاری نامعتبر است.")
 
-        weekly_by_day = {item.get("day"): item for item in weekly if isinstance(item, dict)}
-
-        reference_days = [6, 0, 1, 2, 3]  # روزهای کاری معمول
-        general = next((weekly_by_day.get(day) for day in reference_days if weekly_by_day.get(day)), None)
-        thursday = weekly_by_day.get(4)
-        friday = weekly_by_day.get(5)
-
-        if general:
-            open_time = (general.get("open") or "08:00").strip()
-            close_time = (general.get("close") or "18:00").strip()
-            set_setting("working_start", open_time or "08:00")
-            set_setting("working_end", close_time or "18:00")
-
-        if thursday:
-            set_setting("thursday_start", (thursday.get("open") or "").strip())
-            set_setting("thursday_end", (thursday.get("close") or "").strip())
-
-        if friday:
-            is_closed = not (friday.get("open") and friday.get("close"))
-            set_setting("disable_friday", "true" if is_closed else "false")
+        normalized = _normalize_weekly_payload(weekly)
+        try:
+            current = {int(item.get("day")): item for item in fetch_working_hours_entries()}
+        except Exception:
+            current = {}
+        for entry in normalized:
+            current[int(entry["day"])] = entry
+        try:
+            save_working_hours_entries(current.values())
+        except Exception:
+            LOGGER.exception("Failed to persist working hours entries")
+            raise ControlPanelError(
+                "ذخیره‌سازی ساعات کاری امکان‌پذیر نبود. دوباره تلاش کنید.",
+                status=500,
+            )
+        try:
+            _sync_legacy_working_settings(current.values())
+        except Exception:
+            LOGGER.debug("Failed to sync legacy working hour settings", exc_info=True)
         changes.append("ساعات کاری")
 
     platforms = payload.get("platforms")

@@ -12,7 +12,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 from telegram.helpers import escape_markdown
 
 from database.connector import fetch_all_inventory_data
-from database.connector_bot import get_setting, is_blacklisted
+from database.connector_bot import fetch_working_hours_entries, get_setting, is_blacklisted
 from utils.platforms import is_platform_enabled
 
 # ================= Consts & Globals =================
@@ -22,6 +22,16 @@ AWAITING_PART_CODE = 1
 
 # Timezone
 _TEHRAN = ZoneInfo("Asia/Tehran")
+_WEEKLY_DAY_ORDER = [5, 6, 0, 1, 2, 3, 4]
+_DAY_LABELS = {
+    0: "دوشنبه",
+    1: "سه‌شنبه",
+    2: "چهارشنبه",
+    3: "پنجشنبه",
+    4: "جمعه",
+    5: "شنبه",
+    6: "یکشنبه",
+}
 
 # Persian -> Latin digits (prebuilt for speed)
 _P2E = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
@@ -69,6 +79,63 @@ def _parse_time_setting(key: str, default_hhmm: str) -> time:
         return datetime.strptime(val, "%H:%M").time()
     except Exception:
         return datetime.strptime(default_hhmm, "%H:%M").time()
+
+
+def _load_weekly_hours_schedule() -> Dict[int, Tuple[time, time]]:
+    schedule: Dict[int, Tuple[time, time]] = {}
+    try:
+        entries = fetch_working_hours_entries()
+    except Exception:
+        entries = []
+
+    for entry in entries:
+        if entry.get("closed"):
+            continue
+        open_raw = entry.get("open")
+        close_raw = entry.get("close")
+        if not (open_raw and close_raw):
+            continue
+        try:
+            open_time = datetime.strptime(open_raw, "%H:%M").time()
+            close_time = datetime.strptime(close_raw, "%H:%M").time()
+        except Exception:
+            continue
+        schedule[int(entry.get("day", -1))] = (open_time, close_time)
+
+    if schedule:
+        return schedule
+
+    # Fallback to legacy single-setting model
+    wk_start = _parse_time_setting("working_start", "09:00")
+    wk_end = _parse_time_setting("working_end", "18:00")
+    th_start = _parse_time_setting("thursday_start", wk_start.strftime("%H:%M"))
+    th_end = _parse_time_setting("thursday_end", wk_end.strftime("%H:%M"))
+    disable_friday = (get_setting("disable_friday") or "true").lower() == "true"
+
+    legacy: Dict[int, Tuple[time, time]] = {}
+    for day in range(7):
+        if day == 3:  # Thursday
+            legacy[day] = (th_start, th_end)
+        elif day == 4:  # Friday
+            if not disable_friday:
+                legacy[day] = (wk_start, wk_end)
+        else:
+            legacy[day] = (wk_start, wk_end)
+    return legacy
+
+
+def _format_weekly_schedule_lines(weekly: Dict[int, Tuple[time, time]]) -> str:
+    lines = []
+    for day in _WEEKLY_DAY_ORDER:
+        label = _DAY_LABELS.get(day, str(day))
+        slot = weekly.get(day)
+        if slot:
+            lines.append(
+                f"  • {label}: {slot[0].strftime('%H:%M')} تا {slot[1].strftime('%H:%M')}"
+            )
+        else:
+            lines.append(f"  • {label}: تعطیل")
+    return "\n".join(lines)
 
 
 def _extract_brand_and_part(code: str) -> Tuple[Optional[str], Optional[str]]:
@@ -166,12 +233,28 @@ def _find_products(key_norm: str) -> List[dict]:
 
 class _Settings:
     def __init__(self) -> None:
-        # working hours
-        self.wk_start = _parse_time_setting("working_start", "08:00")
-        self.wk_end = _parse_time_setting("working_end", "18:00")
-        self.th_start = _parse_time_setting("thursday_start", "08:00")
-        self.th_end = _parse_time_setting("thursday_end", "12:30")
-        self.disable_friday = (get_setting("disable_friday") or "true").lower() == "true"
+        # working hours (per-day schedule)
+        self.weekly_hours = _load_weekly_hours_schedule()
+
+        general_candidates = [0, 1, 2, 5, 6, 3]
+        default_start = time(9, 0)
+        default_end = time(18, 0)
+        general_slot = next(
+            (self.weekly_hours.get(day) for day in general_candidates if self.weekly_hours.get(day)),
+            None,
+        )
+        if general_slot:
+            self.wk_start, self.wk_end = general_slot
+        else:
+            self.wk_start, self.wk_end = default_start, default_end
+
+        thursday_slot = self.weekly_hours.get(3)
+        if thursday_slot:
+            self.th_start, self.th_end = thursday_slot
+        else:
+            self.th_start, self.th_end = self.wk_start, self.wk_end
+
+        self.disable_friday = 4 not in self.weekly_hours
 
         # quota (0 = unlimited). DB-نمی‌سازد؛ در حافظهٔ کاربر تلگرام نگه می‌داریم.
         try:
@@ -201,12 +284,11 @@ class _Settings:
 
 def _within_working_hours(now: datetime, st: _Settings) -> bool:
     wd, tnow = now.weekday(), now.time()
-    if wd == 4:  # Friday (Python: Monday=0 ... Sunday=6)
-        return (not st.disable_friday) and (st.wk_start <= tnow < st.wk_end)
-    if wd == 3:  # Thursday
-        return st.th_start <= tnow < st.th_end
-    # Saturday-Wednesday
-    return st.wk_start <= tnow < st.wk_end
+    slot = st.weekly_hours.get(wd)
+    if not slot:
+        return False
+    open_time, close_time = slot
+    return open_time <= tnow < close_time
 
 
 def _delivery_line_for(now: datetime, st: _Settings) -> str:
@@ -328,10 +410,9 @@ async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAUL
     st = _Settings()
     now = datetime.now(_TEHRAN)
     if not _within_working_hours(now, st):
+        schedule_text = _format_weekly_schedule_lines(st.weekly_hours)
         await update.message.reply_text(
-            f"⏰ ساعات کاری ربات:\n"
-            f"  • شنبه تا چهارشنبه: {st.wk_start.strftime('%H:%M')} تا {st.wk_end.strftime('%H:%M')}\n"
-            f"  • پنج‌شنبه: {st.th_start.strftime('%H:%M')} تا {st.th_end.strftime('%H:%M')}\n\n"
+            f"⏰ ساعات کاری ربات:\n{schedule_text}\n\n"
             "لطفاً در این بازه‌ها برای استعلام تلاش کنید."
         )
         return ConversationHandler.END
@@ -355,10 +436,9 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
     st = _Settings()
     now = datetime.now(_TEHRAN)
     if not _within_working_hours(now, st):
+        schedule_text = _format_weekly_schedule_lines(st.weekly_hours)
         await update.message.reply_text(
-            f"⏰ ساعات کاری ربات:\n"
-            f"  • شنبه تا چهارشنبه: {st.wk_start.strftime('%H:%M')} تا {st.wk_end.strftime('%H:%M')}\n"
-            f"  • پنج‌شنبه: {st.th_start.strftime('%H:%M')} تا {st.th_end.strftime('%H:%M')}\n\n"
+            f"⏰ ساعات کاری ربات:\n{schedule_text}\n\n"
             "لطفاً در این بازه‌ها برای استعلام تلاش کنید."
         )
         return ConversationHandler.END
