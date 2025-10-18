@@ -10,6 +10,8 @@
   --color-primary: #5865f2;
   --color-primary-dark: #4049c9;
   --color-danger: #f25f5c;
+  --color-warning: #f59e0b;
+  --color-warning-bg: #fef3c7;
   --color-success: #22c55e;
   --color-border: #d7dce7;
   --color-text: #1f2937;
@@ -31,6 +33,8 @@
     --color-primary: #7c83ff;
     --color-primary-dark: #5e64d6;
     --color-danger: #f87171;
+    --color-warning: #fbbf24;
+    --color-warning-bg: rgba(251, 191, 36, 0.15);
     --color-success: #34d399;
     --color-border: #334155;
     --color-text: #f8fafc;
@@ -126,6 +130,55 @@ textarea:focus-visible {
   gap: 8px;
 }
 
+.sidebar__footer {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  text-align: right;
+}
+
+.sidebar__footer-label {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(248, 250, 252, 0.55);
+}
+
+.sidebar__footer-link {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  color: #e0e7ff;
+  font-weight: 600;
+  text-decoration: none;
+  text-shadow: 0 0 6px rgba(124, 136, 255, 0.6), 0 0 14px rgba(88, 101, 242, 0.35);
+  animation: sidebar-glow 2.8s ease-in-out infinite;
+}
+
+.sidebar__footer-link:hover,
+.sidebar__footer-link:focus {
+  color: #ffffff;
+}
+
+.sidebar__footer-link small {
+  font-size: 12px;
+  font-weight: 400;
+  color: rgba(199, 210, 254, 0.9);
+}
+
+@keyframes sidebar-glow {
+  0%,
+  100% {
+    text-shadow: 0 0 6px rgba(124, 136, 255, 0.6), 0 0 16px rgba(88, 101, 242, 0.45);
+  }
+  50% {
+    text-shadow: 0 0 10px rgba(164, 178, 255, 0.95), 0 0 24px rgba(88, 101, 242, 0.8);
+  }
+}
+
 .sidebar__link {
   padding: 10px 14px;
   border-radius: var(--radius-md);
@@ -152,6 +205,21 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 24px;
+}
+
+.global-alert {
+  display: none;
+  padding: 14px 18px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-warning);
+  background-color: var(--color-warning-bg);
+  color: var(--color-warning);
+  font-weight: 600;
+  box-shadow: 0 10px 24px -20px var(--color-shadow);
+}
+
+.global-alert:not([hidden]) {
+  display: block;
 }
 
 .main-header {
@@ -202,6 +270,12 @@ textarea:focus-visible {
   margin: 0;
   font-size: 22px;
   font-weight: 600;
+}
+
+.section-heading__subtitle {
+  margin: 4px 0 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
 }
 
 .section-heading__meta {
@@ -273,6 +347,44 @@ textarea:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.status-row__item--platforms {
+  align-items: flex-start;
+}
+
+.status-row__value {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.status-row__value--platforms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  justify-content: flex-end;
+}
+
+.status-row__platform {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.status-row__platform .badge {
+  margin-inline-start: 4px;
+}
+
+.status-row__value--multiline {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  font-weight: 500;
+  text-align: right;
+  color: var(--color-text);
 }
 
 .status-row__message {
@@ -354,6 +466,17 @@ tbody tr:nth-of-type(odd) {
   flex-wrap: wrap;
 }
 
+.log-time {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.log-time__meta {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
 .badge {
   display: inline-flex;
   align-items: center;
@@ -423,6 +546,12 @@ tbody tr:nth-of-type(odd) {
   gap: 6px;
 }
 
+.form-control__hint {
+  font-size: 13px;
+  color: rgba(17, 24, 39, 0.65);
+  margin: 0;
+}
+
 .form-control label {
   font-weight: 600;
   font-size: 14px;
@@ -480,6 +609,37 @@ tbody tr:nth-of-type(odd) {
   gap: 6px;
   font-size: 13px;
   color: var(--color-text-muted);
+}
+
+.settings-card__group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 16px;
+  margin-top: 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.settings-card__group:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.settings-card__subtitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-form textarea {
+  resize: vertical;
 }
 
 .form-actions {
