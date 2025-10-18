@@ -182,11 +182,75 @@ export async function mount(container) {
     const messageRow = createElement('div', { classes: ['status-row__item'] });
     messageRow.append(createElement('span', { text: 'وضعیت سرویس' }), statusBadge);
 
+    const platformsRow = createElement('div', { classes: ['status-row__item', 'status-row__item--platforms'] });
+    platformsRow.append(createElement('span', { text: 'پلتفرم‌ها' }));
+    const platformValues = createElement('div', { classes: ['status-row__value', 'status-row__value--platforms'] });
+    const platforms = data.status.platforms ?? {};
+    [
+      ['telegram', 'تلگرام'],
+      ['whatsapp', 'واتساپ'],
+    ].forEach(([key, label]) => {
+      const wrapper = createElement('span', { classes: ['status-row__platform'] });
+      const badge = createBadge(platforms[key] ? 'فعال' : 'غیرفعال', platforms[key] ? 'success' : 'danger');
+      wrapper.append(document.createTextNode(label), badge);
+      platformValues.append(wrapper);
+    });
+    platformsRow.append(platformValues);
+
+    const operations = data.status.operations ?? {};
+
+    const lunchBreak = operations.lunchBreak ?? {};
+    const lunchLabel = lunchBreak.start && lunchBreak.end
+      ? `${lunchBreak.start} تا ${lunchBreak.end}`
+      : 'تعریف نشده';
+    const lunchRow = createElement('div', { classes: ['status-row__item'] });
+    lunchRow.append(
+      createElement('span', { text: 'استراحت ناهار' }),
+      createElement('span', { classes: ['status-row__value'], text: lunchLabel })
+    );
+
+    const queryLimit = operations.queryLimit;
+    const queryText =
+      typeof queryLimit === 'number' && queryLimit > 0
+        ? `${queryLimit} بار در روز`
+        : 'بدون محدودیت';
+    const queryRow = createElement('div', { classes: ['status-row__item'] });
+    queryRow.append(
+      createElement('span', { text: 'محدودیت استعلام' }),
+      createElement('span', { classes: ['status-row__value'], text: queryText })
+    );
+
+    const deliveryInfo = operations.delivery ?? {};
+    const deliverySummary = createElement('div', {
+      classes: ['status-row__value', 'status-row__value--multiline'],
+    });
+    deliverySummary.append(
+      createElement('span', {
+        text: deliveryInfo.changeover ? `پس از ساعت ${deliveryInfo.changeover}` : 'ساعت تغییر تعریف نشده است',
+      }),
+      createElement('span', { text: `قبل: ${deliveryInfo.before ? deliveryInfo.before : '—'}` }),
+      createElement('span', { text: `بعد: ${deliveryInfo.after ? deliveryInfo.after : '—'}` })
+    );
+    const deliveryRow = createElement('div', { classes: ['status-row__item'] });
+    deliveryRow.append(createElement('span', { text: 'اطلاع‌رسانی تحویل' }), deliverySummary);
+
     const workingHoursList = renderWorkingHoursList(workingHours);
     const workingHoursWrapper = createElement('div', { classes: ['status-row__item'] });
-    workingHoursWrapper.append(createElement('span', { text: `منطقه زمانی: ${workingHours.timezone}` }), workingHoursList);
+    workingHoursWrapper.append(
+      createElement('span', { text: `منطقه زمانی: ${workingHours.timezone}` }),
+      workingHoursList
+    );
 
-    statusContent.append(statusRow, messageRow, createElement('p', { classes: ['status-row__message'], text: message }), workingHoursWrapper);
+    statusContent.append(
+      statusRow,
+      messageRow,
+      platformsRow,
+      createElement('p', { classes: ['status-row__message'], text: message }),
+      lunchRow,
+      queryRow,
+      deliveryRow,
+      workingHoursWrapper
+    );
   }
 
   await fetchData();

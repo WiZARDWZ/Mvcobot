@@ -48,9 +48,21 @@
           <a class="sidebar__link" href="#/settings" data-route-link>
             <span>تنظیمات</span>
           </a>
+          <a class="sidebar__link" href="#/audit-log" data-route-link>
+            <span>گزارش تغییرات</span>
+          </a>
         </nav>
       </aside>
       <main class="main-content" id="main-content" tabindex="-1">
+        <div
+          class="global-alert"
+          data-role="fallback-alert"
+          role="status"
+          aria-live="assertive"
+          hidden
+        >
+          اتصال به پایگاه‌داده برقرار نیست؛ داده‌های نمونه نمایش داده می‌شوند.
+        </div>
         <header class="main-header">
           <div>
             <h2 class="main-header__title">کنترل‌پنل Mvcobot</h2>

@@ -12,6 +12,8 @@ const defaultConfig = {
 };
 
 const DAYS_IN_WEEK = 7;
+const DEFAULT_FALLBACK_MESSAGE =
+  'اتصال به پایگاه‌داده برقرار نیست؛ داده‌های نمونه نمایش داده می‌شوند.';
 
 const seededRandom = (() => {
   let seed = 42;
@@ -63,6 +65,7 @@ const mockStore = {
     monthly: monthlyData,
     cache: {
       lastUpdatedISO: new Date(Date.now() - 1000 * 60 * 32).toISOString(),
+      usingFallback: true,
     },
     status: {
       active: true,
@@ -75,6 +78,17 @@ const mockStore = {
         })),
       },
       message: 'ربات فعال و آماده پاسخ‌گویی است.',
+      operations: {
+        lunchBreak: { start: '12:30', end: '13:30' },
+        queryLimit: 50,
+        delivery: {
+          before: 'تحویل کالا هر روز ساعت 16 و پنجشنبه‌ها ساعت 12:30 در دفتر بازار',
+          after: 'ارسال مستقیم از انبار با زمان تقریبی تحویل 45 دقیقه امکان‌پذیر است.',
+          changeover: '15:30',
+        },
+      },
+      dataSource: 'fallback',
+      usingFallback: true,
     },
   },
   commands: [
@@ -127,7 +141,38 @@ const mockStore = {
       telegram: defaultConfig.TELEGRAM_ENABLED,
       whatsapp: defaultConfig.WHATSAPP_ENABLED,
     },
+    lunchBreak: { start: '12:30', end: '13:30' },
+    queryLimit: 50,
+    deliveryInfo: {
+      before: 'تحویل کالا هر روز ساعت 16 و پنجشنبه‌ها ساعت 12:30 در دفتر بازار',
+      after: 'ارسال مستقیم از انبار با زمان تقریبی تحویل 45 دقیقه امکان‌پذیر است.',
+      changeover: '15:30',
+    },
+    dataSource: 'fallback',
   },
+  auditLog: [
+    {
+      id: 'log-1',
+      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
+      message: 'به‌روزرسانی تنظیمات',
+      details: 'ساعات کاری، پلتفرم‌ها',
+      actor: 'کنترل‌پنل',
+    },
+    {
+      id: 'log-2',
+      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 6).toISOString(),
+      message: 'تغییر وضعیت ربات',
+      details: 'فعال',
+      actor: 'کنترل‌پنل',
+    },
+    {
+      id: 'log-3',
+      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 12).toISOString(),
+      message: 'به‌روزرسانی کش کالا',
+      details: 'نمونه',
+      actor: 'کنترل‌پنل',
+    },
+  ],
 };
 
 const delay = (ms = 360) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -138,7 +183,7 @@ function getConfig() {
 
 function isMockMode() {
   const { API_BASE_URL } = getConfig();
-  return !API_BASE_URL;
+  return API_BASE_URL === null || typeof API_BASE_URL === 'undefined';
 }
 
 function withAuthHeaders(headers = {}) {
@@ -154,7 +199,12 @@ function withAuthHeaders(headers = {}) {
 
 async function request(path, { method = 'GET', body } = {}) {
   const { API_BASE_URL } = getConfig();
-  const url = `${API_BASE_URL}${path}`;
+  let base = '';
+  if (typeof API_BASE_URL === 'string') {
+    base = API_BASE_URL.trim();
+  }
+  const normalizedBase = base.endsWith('/') ? base.slice(0, -1) : base;
+  const url = normalizedBase ? `${normalizedBase}${path}` : path;
   const options = {
     method,
     headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
@@ -185,8 +235,12 @@ function clone(data) {
 }
 
 function emitFallback(detail) {
+  const payload = {
+    message: DEFAULT_FALLBACK_MESSAGE,
+    ...detail,
+  };
   try {
-    window.dispatchEvent(new CustomEvent(API_EVENTS.FALLBACK, { detail }));
+    window.dispatchEvent(new CustomEvent(API_EVENTS.FALLBACK, { detail: payload }));
   } catch (error) {
     // ignored: running outside the browser
   }
@@ -219,13 +273,37 @@ function ensureId(prefix) {
   return `${prefix}-${Math.random().toString(16).slice(2)}-${Date.now()}`;
 }
 
+function pushMockAudit(message, details) {
+  const entry = {
+    id: ensureId('log'),
+    timestamp: new Date().toISOString(),
+    message,
+    actor: 'کنترل‌پنل',
+  };
+  if (details) {
+    entry.details = details;
+  }
+  mockStore.auditLog.unshift(entry);
+  mockStore.auditLog = mockStore.auditLog.slice(0, 50);
+  return entry;
+}
+
 export const api = {
   async getMetrics() {
-    return runWithFallback(
+    const result = await runWithFallback(
       'getMetrics',
       () => request('/api/v1/metrics'),
       () => mockStore.metrics
     );
+    if (
+      isMockMode() ||
+      result?.cache?.usingFallback ||
+      result?.status?.usingFallback ||
+      result?.status?.dataSource === 'fallback'
+    ) {
+      emitFallback({ method: 'getMetrics', reason: 'usingFallback' });
+    }
+    return result;
   },
 
   async getCommands() {
@@ -244,6 +322,7 @@ export const api = {
         ...payload,
       };
       mockStore.commands.unshift(item);
+      pushMockAudit('ثبت دستور جدید', `${item.command} (شناسه ${item.id})`);
       return item;
     };
 
@@ -259,6 +338,7 @@ export const api = {
       const index = mockStore.commands.findIndex((item) => item.id === id);
       if (index === -1) throw new Error('دستور یافت نشد');
       mockStore.commands[index] = { ...mockStore.commands[index], ...payload };
+      pushMockAudit('ویرایش دستور', `${mockStore.commands[index].command} (شناسه ${id})`);
       return mockStore.commands[index];
     };
 
@@ -272,6 +352,7 @@ export const api = {
   async deleteCommand(id) {
     const mockHandler = () => {
       mockStore.commands = mockStore.commands.filter((item) => item.id !== id);
+      pushMockAudit('حذف دستور', `شناسه ${id}`);
       return { success: true };
     };
 
@@ -298,6 +379,7 @@ export const api = {
         ...payload,
       };
       mockStore.blocklist.unshift(item);
+      pushMockAudit('افزودن به لیست مسدود', payload.userId || payload.phoneOrUser);
       return item;
     };
 
@@ -311,6 +393,7 @@ export const api = {
   async removeBlockItem(id) {
     const mockHandler = () => {
       mockStore.blocklist = mockStore.blocklist.filter((item) => item.id !== id);
+      pushMockAudit('حذف از لیست مسدود', `شناسه ${id}`);
       return { success: true };
     };
 
@@ -322,11 +405,15 @@ export const api = {
   },
 
   async getSettings() {
-    return runWithFallback(
+    const result = await runWithFallback(
       'getSettings',
       () => request('/api/v1/settings'),
       () => mockStore.settings
     );
+    if (isMockMode() || result?.dataSource === 'fallback') {
+      emitFallback({ method: 'getSettings', reason: 'usingFallback' });
+    }
+    return result;
   },
 
   async updateSettings(payload) {
@@ -350,14 +437,61 @@ export const api = {
           weekly: (payload.weekly ?? mockStore.settings.weekly).map((item) => ({ ...item })),
         };
       }
+      if (payload.lunchBreak) {
+        mockStore.settings.lunchBreak = {
+          start: payload.lunchBreak.start ?? null,
+          end: payload.lunchBreak.end ?? null,
+        };
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'queryLimit')) {
+        mockStore.settings.queryLimit = payload.queryLimit ?? null;
+      }
+      if (payload.deliveryInfo) {
+        mockStore.settings.deliveryInfo = {
+          before: payload.deliveryInfo.before ?? '',
+          after: payload.deliveryInfo.after ?? '',
+          changeover: payload.deliveryInfo.changeover ?? null,
+        };
+      }
+      if (payload.lunchBreak) {
+        mockStore.metrics.status.operations.lunchBreak = {
+          start: payload.lunchBreak.start ?? null,
+          end: payload.lunchBreak.end ?? null,
+        };
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'queryLimit')) {
+        mockStore.metrics.status.operations.queryLimit = payload.queryLimit ?? null;
+      }
+      if (payload.deliveryInfo) {
+        mockStore.metrics.status.operations.delivery = {
+          before: payload.deliveryInfo.before ?? '',
+          after: payload.deliveryInfo.after ?? '',
+          changeover: payload.deliveryInfo.changeover ?? null,
+        };
+      }
+      const touched = [];
+      if (payload.timezone || payload.weekly) touched.push('ساعات کاری');
+      if (payload.platforms) touched.push('پلتفرم‌ها');
+      if (payload.lunchBreak) touched.push('استراحت ناهار');
+      if (Object.prototype.hasOwnProperty.call(payload, 'queryLimit'))
+        touched.push('محدودیت استعلام');
+      if (payload.deliveryInfo) touched.push('اطلاعات تحویل');
+      if (touched.length) {
+        const summary = [...new Set(touched)].join('، ');
+        pushMockAudit('به‌روزرسانی تنظیمات', summary);
+      }
       return mockStore.settings;
     };
 
-    return runWithFallback(
+    const result = await runWithFallback(
       'updateSettings',
       () => request('/api/v1/settings', { method: 'PUT', body: payload }),
       mockHandler
     );
+    if (isMockMode() || result?.dataSource === 'fallback') {
+      emitFallback({ method: 'updateSettings', reason: 'usingFallback' });
+    }
+    return result;
   },
 
   async toggleBot(active) {
@@ -366,6 +500,7 @@ export const api = {
       mockStore.metrics.status.message = active
         ? 'ربات فعال و آماده پاسخ‌گویی است.'
         : 'ربات غیرفعال است.';
+      pushMockAudit('تغییر وضعیت ربات', active ? 'فعال' : 'غیرفعال');
       return mockStore.metrics.status;
     };
 
@@ -380,6 +515,7 @@ export const api = {
     const mockHandler = () => {
       const now = new Date().toISOString();
       mockStore.metrics.cache.lastUpdatedISO = now;
+      pushMockAudit('به‌روزرسانی کش کالا', now);
       return { lastUpdatedISO: now };
     };
 
@@ -388,5 +524,21 @@ export const api = {
       () => request('/api/v1/cache/invalidate', { method: 'POST' }),
       mockHandler
     );
+  },
+
+  async getAuditLog() {
+    const result = await runWithFallback(
+      'getAuditLog',
+      () => request('/api/v1/audit-log'),
+      () => ({
+        items: mockStore.auditLog,
+        total: mockStore.auditLog.length,
+        dataSource: 'fallback',
+      })
+    );
+    if (isMockMode() || result?.dataSource === 'fallback') {
+      emitFallback({ method: 'getAuditLog', reason: 'usingFallback' });
+    }
+    return result;
   },
 };
