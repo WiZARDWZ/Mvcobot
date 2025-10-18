@@ -19,7 +19,7 @@ from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 from playwright.async_api import TimeoutError as PWTimeout
 from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
-from database.connector_bot import get_setting
+from database.connector_bot import get_setting, log_whatsapp_message
 
 DB_DOWN_MESSAGE = (
     "دسترسی به دیتابیس قطع میباشد , در حال بررسی مشکل هستیم\n"
@@ -340,6 +340,13 @@ class WAWebBot:
         self._hours_loaded_at: float = 0.0
 
     def dlog(self, msg: str): self.log(f"[{_now()}] {self.cfg.debug_tag} | {msg}")
+
+    async def _log_outgoing_message(self, chat_identifier: Optional[str], body: str) -> None:
+        try:
+            await asyncio.to_thread(log_whatsapp_message, chat_identifier, "out", body)
+        except Exception as exc:
+            self.dlog(f"whatsapp log failed: {exc!r}")
+
     def set_interval(self, sec: float):
         try: self.cfg.idle_scan_interval_sec = max(2.0, float(sec))
         except Exception: pass
@@ -1259,12 +1266,14 @@ class WAWebBot:
             after = await self._count_outgoing_bubbles()
             if after > before:
                 self.dlog(f"sent bubble confirmed {before}->{after}")
+                await self._log_outgoing_message(expected_header_title, body)
                 return True
 
         if body.strip() == "**":
             try:
                 if await self._composer_empty(tb):
                     self.dlog("composer empty after '**' -> treating as sent")
+                    await self._log_outgoing_message(expected_header_title, body)
                     return True
             except Exception:
                 pass
@@ -1280,6 +1289,7 @@ class WAWebBot:
                     after = await self._count_outgoing_bubbles()
                     if after > before:
                         self.dlog(f"sent bubble confirmed after click {before}->{after}")
+                        await self._log_outgoing_message(expected_header_title, body)
                         return True
             else: self.dlog("SEND button not found")
         except Exception as e:
