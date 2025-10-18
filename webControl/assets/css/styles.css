@@ -130,6 +130,55 @@ textarea:focus-visible {
   gap: 8px;
 }
 
+.sidebar__footer {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  text-align: right;
+}
+
+.sidebar__footer-label {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(248, 250, 252, 0.55);
+}
+
+.sidebar__footer-link {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  color: #e0e7ff;
+  font-weight: 600;
+  text-decoration: none;
+  text-shadow: 0 0 6px rgba(124, 136, 255, 0.6), 0 0 14px rgba(88, 101, 242, 0.35);
+  animation: sidebar-glow 2.8s ease-in-out infinite;
+}
+
+.sidebar__footer-link:hover,
+.sidebar__footer-link:focus {
+  color: #ffffff;
+}
+
+.sidebar__footer-link small {
+  font-size: 12px;
+  font-weight: 400;
+  color: rgba(199, 210, 254, 0.9);
+}
+
+@keyframes sidebar-glow {
+  0%,
+  100% {
+    text-shadow: 0 0 6px rgba(124, 136, 255, 0.6), 0 0 16px rgba(88, 101, 242, 0.45);
+  }
+  50% {
+    text-shadow: 0 0 10px rgba(164, 178, 255, 0.95), 0 0 24px rgba(88, 101, 242, 0.8);
+  }
+}
+
 .sidebar__link {
   padding: 10px 14px;
   border-radius: var(--radius-md);

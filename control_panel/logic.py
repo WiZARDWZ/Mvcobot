@@ -9,9 +9,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from database.connector_bot import (
     add_to_blacklist,
+    fetch_audit_log_entries,
     get_blacklist,
     get_connection,
     get_setting,
+    record_audit_event,
     remove_from_blacklist,
     set_setting,
 )
@@ -131,7 +133,7 @@ def _save_json_setting(key: str, value: Any) -> None:
         raise ControlPanelError("ذخیره‌سازی تنظیمات امکان‌پذیر نبود. دوباره تلاش کنید.", status=500)
 
 
-def _load_audit_log_entries() -> List[Dict[str, Any]]:
+def _load_audit_log_fallback() -> List[Dict[str, Any]]:
     data = _load_json_setting(AUDIT_LOG_KEY, [])
     if not isinstance(data, list):
         return []
@@ -159,7 +161,7 @@ def _load_audit_log_entries() -> List[Dict[str, Any]]:
     return entries
 
 
-def _persist_audit_log(entries: List[Dict[str, Any]]) -> None:
+def _persist_audit_log_fallback(entries: List[Dict[str, Any]]) -> None:
     try:
         _save_json_setting(AUDIT_LOG_KEY, entries[:MAX_AUDIT_LOG_ENTRIES])
     except ControlPanelError:
@@ -176,10 +178,15 @@ def _append_audit_event(message: str, *, actor: str = "کنترل‌پنل", det
     }
     if details:
         entry["details"] = details
+    try:
+        record_audit_event(message, actor=actor, details=details)
+        return
+    except Exception:
+        LOGGER.debug("Falling back to settings-based audit trail persistence", exc_info=True)
 
-    entries = _load_audit_log_entries()
+    entries = _load_audit_log_fallback()
     entries.insert(0, entry)
-    _persist_audit_log(entries)
+    _persist_audit_log_fallback(entries)
 
 
 def _format_month_label(year: int, month: int) -> str:
@@ -628,14 +635,27 @@ def get_settings() -> Dict[str, Any]:
 
 
 def get_audit_log(limit: int = 50) -> Dict[str, Any]:
-    entries = _load_audit_log_entries()
+    live_limit = limit if isinstance(limit, int) and limit > 0 else MAX_AUDIT_LOG_ENTRIES
+    try:
+        entries, total = fetch_audit_log_entries(live_limit)
+        if limit > 0 and len(entries) > limit:
+            entries = entries[:limit]
+        return {
+            "items": entries,
+            "total": total,
+            "dataSource": "live",
+        }
+    except Exception:
+        LOGGER.debug("Falling back to settings-based audit log entries", exc_info=True)
+
+    entries = _load_audit_log_fallback()
     total = len(entries)
     if limit > 0:
         entries = entries[:limit]
     return {
         "items": entries,
         "total": total,
-        "dataSource": "live",
+        "dataSource": "fallback",
     }
 
 
