@@ -272,21 +272,18 @@ export function renderWorkingHoursList(workingHours) {
   };
   const weekly = Array.isArray(workingHours?.weekly) ? [...workingHours.weekly] : [];
   weekly.sort((a, b) => {
-    const aDay = Number(a.day);
-    const bDay = Number(b.day);
-    const aIndex = order.indexOf(aDay);
-    const bIndex = order.indexOf(bDay);
+    const aIndex = order.indexOf(a.day);
+    const bIndex = order.indexOf(b.day);
     const safeA = aIndex === -1 ? order.length : aIndex;
     const safeB = bIndex === -1 ? order.length : bIndex;
     return safeA - safeB;
   });
   weekly.forEach((item) => {
-    const day = Number(item.day);
-    const dayName = dayNames[day] || `روز ${day}`;
-    const hasHours = Boolean(item.open && item.close && item.closed !== true);
-    const text = hasHours
-      ? `${dayName}: ${item.open} – ${item.close}`
-      : `${dayName}: تعطیل`;
+    const dayName = dayNames[item.day] || `روز ${item.day}`;
+    const text =
+      item.open && item.close
+        ? `${dayName}: ${item.open} – ${item.close}`
+        : `${dayName}: تعطیل`;
     list.appendChild(createElement('li', { text }));
   });
   return list;

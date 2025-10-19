@@ -416,59 +416,11 @@ def _merge_platform_flags(current: Dict[str, bool], overrides: Dict[str, Any]) -
 
 
 def _order_weekly_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Normalize and order weekly schedule entries.
-
-    Ensures day identifiers are integers, coerces empty strings to ``None`` and
-    always provides a ``closed`` flag so the UI can reliably map persisted
-    values even when the backend serialises numbers as strings (e.g. through
-    certain ODBC drivers).
-    """
-
     order_map = {day: index for index, day in enumerate(WORKING_DAY_ORDER)}
-    normalised: List[Dict[str, Any]] = []
-
-    for item in items:
-        try:
-            day = int(item.get("day"))
-        except Exception:
-            continue
-        if day < 0 or day > 6:
-            continue
-
-        open_value = item.get("open")
-        close_value = item.get("close")
-
-        if isinstance(open_value, str):
-            open_value = open_value.strip()
-            if ":" in open_value and len(open_value) >= 5:
-                open_value = open_value[:5]
-        if isinstance(close_value, str):
-            close_value = close_value.strip()
-            if ":" in close_value and len(close_value) >= 5:
-                close_value = close_value[:5]
-
-        if hasattr(open_value, "strftime"):
-            open_value = open_value.strftime("%H:%M")
-        if hasattr(close_value, "strftime"):
-            close_value = close_value.strftime("%H:%M")
-
-        open_text = open_value if open_value else None
-        close_text = close_value if close_value else None
-        closed_flag = bool(item.get("closed")) or not (open_text and close_text)
-
-        normalised.append(
-            {
-                "day": day,
-                "open": None if closed_flag else open_text,
-                "close": None if closed_flag else close_text,
-                "closed": closed_flag,
-            }
-        )
-
-    normalised.sort(
-        key=lambda entry: order_map.get(entry["day"], len(WORKING_DAY_ORDER))
+    return sorted(
+        items,
+        key=lambda item: order_map.get(int(item.get("day", -1)), len(WORKING_DAY_ORDER)),
     )
-    return normalised
 
 
 def _legacy_weekly_schedule() -> List[Dict[str, Any]]:
@@ -493,14 +445,7 @@ def _legacy_weekly_schedule() -> List[Dict[str, Any]]:
         else:
             open_time = general_open or None
             close_time = general_close or None
-        legacy.append(
-            {
-                "day": day,
-                "open": open_time,
-                "close": close_time,
-                "closed": not (open_time and close_time),
-            }
-        )
+        legacy.append({"day": day, "open": open_time, "close": close_time})
     return legacy
 
 
