@@ -151,18 +151,6 @@ const mockStore = {
     },
     dataSource: 'fallback',
   },
-  dmBot: {
-    settings: {
-      enabled: false,
-      token: '',
-      channelId: '',
-      workHoursStart: '09:00',
-      workHoursEnd: '17:00',
-      rateLimit: '20/min',
-      whitelist: '',
-    },
-    status: 'disabled',
-  },
   auditLog: [
     {
       id: 'log-1',
@@ -535,55 +523,6 @@ export const api = {
     return runWithFallback(
       'invalidateCache',
       () => request('/api/v1/cache/invalidate', { method: 'POST' }),
-      mockHandler
-    );
-  },
-
-  async getDMBotSettings() {
-    const result = await runWithFallback(
-      'getDMBotSettings',
-      () => request('/api/dm/settings'),
-      () => mockStore.dmBot
-    );
-    if (isMockMode()) {
-      emitFallback({ method: 'getDMBotSettings', reason: 'usingFallback' });
-    }
-    return result;
-  },
-
-  async updateDMBotSettings(payload) {
-    const mockHandler = () => {
-      mockStore.dmBot.settings = {
-        ...mockStore.dmBot.settings,
-        ...payload,
-      };
-      if (Object.prototype.hasOwnProperty.call(payload, 'enabled')) {
-        mockStore.dmBot.status = payload.enabled ? 'running' : 'disabled';
-      }
-      pushMockAudit('به‌روزرسانی تنظیمات DM Bot', JSON.stringify(payload));
-      return mockStore.dmBot;
-    };
-    const result = await runWithFallback(
-      'updateDMBotSettings',
-      () => request('/api/dm/settings', { method: 'POST', body: payload }),
-      mockHandler
-    );
-    if (isMockMode()) {
-      emitFallback({ method: 'updateDMBotSettings', reason: 'usingFallback' });
-    }
-    return result;
-  },
-
-  async testDMBot(message) {
-    const payload = typeof message === 'object' ? message : { message };
-    const body = { message: payload?.message ?? 'پیام تست DM Bot' };
-    const mockHandler = () => {
-      pushMockAudit('ارسال پیام تست DM Bot', body.message);
-      return { success: true };
-    };
-    return runWithFallback(
-      'testDMBot',
-      () => request('/api/dm/test', { method: 'POST', body }),
       mockHandler
     );
   },

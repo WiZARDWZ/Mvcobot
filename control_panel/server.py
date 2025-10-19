@@ -111,11 +111,6 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
             self._handle_api(lambda: (HTTPStatus.OK, logic.toggle_bot(active)))
         elif path == "/api/v1/cache/invalidate":
             self._handle_api(lambda: (HTTPStatus.OK, logic.invalidate_cache()))
-        elif path == "/api/dm/settings":
-            self._handle_api(lambda: (HTTPStatus.OK, logic.update_dm_settings(body)))
-        elif path == "/api/dm/test":
-            message = body.get("message") if isinstance(body, dict) else None
-            self._handle_api(lambda: (HTTPStatus.OK, logic.send_dm_test(message)))
         else:
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint not found")
 
@@ -174,8 +169,6 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
             self._handle_api(lambda: (HTTPStatus.OK, logic.get_settings()))
         elif path == "/api/v1/audit-log":
             self._handle_api(lambda: (HTTPStatus.OK, logic.get_audit_log()))
-        elif path == "/api/dm/settings":
-            self._handle_api(lambda: (HTTPStatus.OK, logic.get_dm_settings()))
         else:
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint not found")
 

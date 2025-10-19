@@ -16,7 +16,6 @@ const routes = {
   '#/blocklist': () => import('./ui/blocklist.js'),
   '#/settings': () => import('./ui/settings.js'),
   '#/audit-log': () => import('./ui/audit-log.js'),
-  '#/dm-bot': () => import('./ui/dm-bot.js'),
 };
 
 let activeRouteCleanup = null;
