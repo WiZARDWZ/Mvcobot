@@ -9,6 +9,7 @@ const defaultConfig = {
   API_KEY: '',
   TELEGRAM_ENABLED: true,
   WHATSAPP_ENABLED: true,
+  TELEGRAM_PRIVATE_ENABLED: true,
 };
 
 const DEFAULT_FALLBACK_MESSAGE =
@@ -49,11 +50,13 @@ function getLastMonths(count = 12) {
 const monthlyData = getLastMonths(12).map(({ month }) => {
   const telegram = Math.floor(seededRandom() * 120 + 30);
   const whatsapp = Math.floor(seededRandom() * 180 + 45);
+  const telegramPrivate = Math.floor(seededRandom() * 90 + 20);
   return {
     month,
     telegram,
     whatsapp,
-    all: telegram + whatsapp,
+    telegram_private: telegramPrivate,
+    all: telegram + whatsapp + telegramPrivate,
   };
 });
 
@@ -67,9 +70,10 @@ const mockStore = {
       (acc, item) => ({
         telegram: acc.telegram + item.telegram,
         whatsapp: acc.whatsapp + item.whatsapp,
+        telegram_private: acc.telegram_private + item.telegram_private,
         all: acc.all + item.all,
       }),
-      { telegram: 0, whatsapp: 0, all: 0 }
+      { telegram: 0, whatsapp: 0, telegram_private: 0, all: 0 }
     ),
     monthly: monthlyData,
     cache: {
@@ -83,6 +87,11 @@ const mockStore = {
         weekly: DEFAULT_WEEKLY_SCHEDULE.map((item) => ({ ...item })),
       },
       message: 'ربات فعال و آماده پاسخ‌گویی است.',
+      platforms: {
+        telegram: defaultConfig.TELEGRAM_ENABLED,
+        whatsapp: defaultConfig.WHATSAPP_ENABLED,
+        telegram_private: defaultConfig.TELEGRAM_PRIVATE_ENABLED,
+      },
       operations: {
         lunchBreak: { start: '12:30', end: '13:30' },
         queryLimit: 50,
@@ -94,6 +103,16 @@ const mockStore = {
       },
       dataSource: 'fallback',
       usingFallback: true,
+      privateTelegram: {
+        enabled: defaultConfig.TELEGRAM_PRIVATE_ENABLED,
+        dmEnabled: true,
+        dataSource: 'sql',
+        cache: {
+          lastUpdatedISO: new Date(Date.now() - 1000 * 60 * 20).toISOString(),
+          records: 420,
+        },
+        totalQueries: 1280,
+      },
     },
   },
   commands: [
@@ -141,6 +160,7 @@ const mockStore = {
     platforms: {
       telegram: defaultConfig.TELEGRAM_ENABLED,
       whatsapp: defaultConfig.WHATSAPP_ENABLED,
+      telegram_private: defaultConfig.TELEGRAM_PRIVATE_ENABLED,
     },
     lunchBreak: { start: '12:30', end: '13:30' },
     queryLimit: 50,
@@ -150,6 +170,28 @@ const mockStore = {
       changeover: '15:30',
     },
     dataSource: 'fallback',
+    privateTelegram: {
+      dmEnabled: true,
+      dataSource: 'sql',
+      excelFile: '',
+      cacheDurationMinutes: 20,
+      workingHours: { start: '08:00', end: '17:30' },
+      thursdayHours: { start: '08:00', end: '13:30' },
+      disableFriday: true,
+      lunchBreak: { start: '14:30', end: '15:00' },
+      queryLimit: 50,
+      deliveryInfo: {
+        before: 'تحویل حضوری تا ۱۵',
+        after: 'ارسال مستقیم پس از ۱۵',
+      },
+      changeoverHour: '15:00',
+      groups: {
+        main: -1001403812583,
+        new: -1002391888673,
+        admin: [-1002391888673],
+        secondary: [],
+      },
+    },
   },
   auditLog: [
     {
@@ -428,6 +470,16 @@ export const api = {
           ...mockStore.settings.platforms,
           ...payload.platforms,
         };
+        mockStore.metrics.status.platforms = {
+          ...mockStore.metrics.status.platforms,
+          ...payload.platforms,
+        };
+        if (Object.prototype.hasOwnProperty.call(payload.platforms, 'telegram_private')) {
+          mockStore.metrics.status.privateTelegram = {
+            ...(mockStore.metrics.status.privateTelegram ?? {}),
+            enabled: Boolean(payload.platforms.telegram_private),
+          };
+        }
       }
       if (payload.weekly) {
         mockStore.settings.weekly = payload.weekly.map((item) => ({ ...item }));
@@ -470,6 +522,47 @@ export const api = {
           changeover: payload.deliveryInfo.changeover ?? null,
         };
       }
+      if (payload.privateTelegram) {
+        const currentPrivate = mockStore.settings.privateTelegram ?? {};
+        const incoming = payload.privateTelegram;
+        mockStore.settings.privateTelegram = {
+          ...currentPrivate,
+          ...incoming,
+          workingHours: {
+            ...(currentPrivate.workingHours ?? {}),
+            ...(incoming.workingHours ?? {}),
+          },
+          thursdayHours: {
+            ...(currentPrivate.thursdayHours ?? {}),
+            ...(incoming.thursdayHours ?? {}),
+          },
+          lunchBreak: {
+            ...(currentPrivate.lunchBreak ?? {}),
+            ...(incoming.lunchBreak ?? {}),
+          },
+          deliveryInfo: {
+            ...(currentPrivate.deliveryInfo ?? {}),
+            ...(incoming.deliveryInfo ?? {}),
+          },
+          groups: {
+            ...(currentPrivate.groups ?? {}),
+            ...(incoming.groups ?? {}),
+          },
+        };
+        const existingPrivateStatus = mockStore.metrics.status.privateTelegram ?? {};
+        mockStore.metrics.status.privateTelegram = {
+          ...existingPrivateStatus,
+          dmEnabled: mockStore.settings.privateTelegram.dmEnabled ?? true,
+          dataSource: mockStore.settings.privateTelegram.dataSource ?? 'sql',
+          enabled:
+            mockStore.metrics.status.platforms?.telegram_private ?? true,
+          cache: existingPrivateStatus.cache ?? {
+            lastUpdatedISO: new Date().toISOString(),
+            records: 0,
+          },
+          totalQueries: existingPrivateStatus.totalQueries ?? 0,
+        };
+      }
       const touched = [];
       if (payload.timezone || payload.weekly) touched.push('ساعات کاری');
       if (payload.platforms) touched.push('پلتفرم‌ها');
@@ -477,6 +570,7 @@ export const api = {
       if (Object.prototype.hasOwnProperty.call(payload, 'queryLimit'))
         touched.push('محدودیت استعلام');
       if (payload.deliveryInfo) touched.push('اطلاعات تحویل');
+      if (payload.privateTelegram) touched.push('تنظیمات تلگرام (خصوصی)');
       if (touched.length) {
         const summary = [...new Set(touched)].join('، ');
         pushMockAudit('به‌روزرسانی تنظیمات', summary);

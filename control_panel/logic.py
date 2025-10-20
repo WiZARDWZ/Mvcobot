@@ -250,14 +250,23 @@ def _column_exists(cur, table_name: str, column_name: str) -> bool:
 
 
 def _collect_metrics(cur) -> Tuple[Dict[str, int], List[Dict[str, Any]]]:
-    totals = {"telegram": 0, "whatsapp": 0, "all": 0}
+    totals = {"telegram": 0, "whatsapp": 0, "telegram_private": 0, "all": 0}
     monthly_map: OrderedDict = OrderedDict()
 
-    def record(year: int, month: int, telegram: int = 0, whatsapp: int = 0) -> None:
+    def record(
+        year: int,
+        month: int,
+        telegram: int = 0,
+        whatsapp: int = 0,
+        telegram_private: int = 0,
+    ) -> None:
         key = (year, month)
-        bucket = monthly_map.setdefault(key, {"telegram": 0, "whatsapp": 0})
+        bucket = monthly_map.setdefault(
+            key, {"telegram": 0, "whatsapp": 0, "telegram_private": 0}
+        )
         bucket["telegram"] += telegram
         bucket["whatsapp"] += whatsapp
+        bucket["telegram_private"] += telegram_private
 
     if _column_exists(cur, "message_log", "platform"):
         rows = cur.execute(
@@ -326,18 +335,20 @@ def _collect_metrics(cur) -> Tuple[Dict[str, int], List[Dict[str, Any]]]:
                 record(year, month, whatsapp=count)
             break
 
-    totals["all"] = totals["telegram"] + totals["whatsapp"]
+    totals["all"] = totals["telegram"] + totals["whatsapp"] + totals["telegram_private"]
 
     monthly: List[Dict[str, Any]] = []
     for (year, month), values in monthly_map.items():
         telegram = values.get("telegram", 0)
         whatsapp = values.get("whatsapp", 0)
+        private = values.get("telegram_private", 0)
         monthly.append(
             {
                 "month": _format_month_label(year, month),
                 "telegram": telegram,
                 "whatsapp": whatsapp,
-                "all": telegram + whatsapp,
+                "telegram_private": private,
+                "all": telegram + whatsapp + private,
             }
         )
 
@@ -358,6 +369,10 @@ def _aggregate_metrics_from_db() -> Metrics:
         monthly = _build_mock_monthly()
         totals = _build_mock_totals()
 
+    private_total = int(status.get("privateTelegram", {}).get("totalQueries", 0) or 0)
+    totals["telegram_private"] = private_total
+    totals["all"] = totals.get("telegram", 0) + totals.get("whatsapp", 0) + private_total
+
     cache_info = {
         "lastUpdatedISO": get_setting(CACHE_KEY) or _now_iso(),
         "usingFallback": fallback,
@@ -370,7 +385,13 @@ def _aggregate_metrics_from_db() -> Metrics:
 def _build_mock_totals() -> Dict[str, int]:
     telegram = 320
     whatsapp = 185
-    return {"telegram": telegram, "whatsapp": whatsapp, "all": telegram + whatsapp}
+    telegram_private = 210
+    return {
+        "telegram": telegram,
+        "whatsapp": whatsapp,
+        "telegram_private": telegram_private,
+        "all": telegram + whatsapp + telegram_private,
+    }
 
 
 def _build_mock_monthly() -> List[Dict[str, Any]]:
@@ -383,12 +404,14 @@ def _build_mock_monthly() -> List[Dict[str, Any]]:
         label = _format_month_label(year, month)
         telegram = 50 + (offset * 3)
         whatsapp = 35 + (offset * 2)
+        private = 40 + (offset * 2)
         results.append(
             {
                 "month": label,
                 "telegram": telegram,
                 "whatsapp": whatsapp,
-                "all": telegram + whatsapp,
+                "telegram_private": private,
+                "all": telegram + whatsapp + private,
             }
         )
     return results
@@ -396,7 +419,7 @@ def _build_mock_monthly() -> List[Dict[str, Any]]:
 
 def _load_platform_settings(enabled: bool) -> Dict[str, bool]:
     stored = _load_json_setting(PLATFORMS_KEY, None)
-    defaults = {"telegram": enabled, "whatsapp": True}
+    defaults = {"telegram": enabled, "whatsapp": True, "telegram_private": True}
     merged = {**defaults}
     if isinstance(stored, dict):
         for key, value in stored.items():
@@ -413,6 +436,231 @@ def _merge_platform_flags(current: Dict[str, bool], overrides: Dict[str, Any]) -
         if key in merged:
             merged[key] = bool(value)
     return merged
+
+
+def _load_private_settings_snapshot() -> Dict[str, Any]:
+    try:
+        from privateTelegram.config.settings import settings as private_settings
+    except Exception:
+        return {
+            "available": False,
+            "dmEnabled": False,
+            "dataSource": "unavailable",
+            "excelFile": "",
+            "cacheDurationMinutes": None,
+            "workingHours": {"start": None, "end": None},
+            "thursdayHours": {"start": None, "end": None},
+            "disableFriday": False,
+            "lunchBreak": {"start": None, "end": None},
+            "queryLimit": None,
+            "deliveryInfo": {"before": "", "after": ""},
+            "changeoverHour": None,
+            "groups": {
+                "main": None,
+                "new": None,
+                "admin": [],
+                "secondary": [],
+            },
+        }
+
+    def _time_pair(key: str) -> Dict[str, Optional[str]]:
+        value = private_settings.get(key, {}) or {}
+        return {
+            "start": str(value.get("start") or "") or None,
+            "end": str(value.get("end") or "") or None,
+        }
+
+    def _safe_minutes(value: Any) -> Optional[int]:
+        try:
+            if value is None:
+                return None
+            minutes = int(str(value).strip())
+            return minutes if minutes > 0 else None
+        except Exception:
+            return None
+
+    def _int_list(key: str) -> List[int]:
+        items = private_settings.get(key, []) or []
+        result: List[int] = []
+        for item in items:
+            try:
+                result.append(int(item))
+            except Exception:
+                continue
+        return result
+
+    delivery_info = private_settings.get("delivery_info", {}) or {}
+
+    snapshot = runtime.get_private_status_snapshot()
+
+    return {
+        "available": True,
+        "enabled": bool(snapshot.get("enabled", False)),
+        "dmEnabled": bool(private_settings.get("dm_enabled", True)),
+        "dataSource": str(private_settings.get("data_source", "sql") or "sql"),
+        "excelFile": str(private_settings.get("excel_file", "") or ""),
+        "cacheDurationMinutes": _safe_minutes(private_settings.get("cache_duration_minutes")),
+        "workingHours": _time_pair("working_hours"),
+        "thursdayHours": _time_pair("thursday_hours"),
+        "disableFriday": bool(private_settings.get("disable_friday", False)),
+        "lunchBreak": _time_pair("lunch_break"),
+        "queryLimit": _safe_int(private_settings.get("query_limit")),
+        "deliveryInfo": {
+            "before": str(delivery_info.get("before_15", "")),
+            "after": str(delivery_info.get("after_15", "")),
+        },
+        "changeoverHour": str(private_settings.get("changeover_hour", "") or "") or None,
+        "groups": {
+            "main": _safe_int(private_settings.get("main_group_id")),
+            "new": _safe_int(private_settings.get("new_group_id")),
+            "admin": _int_list("admin_group_ids"),
+            "secondary": _int_list("secondary_group_ids"),
+        },
+    }
+
+
+def _update_private_settings(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+    try:
+        from privateTelegram.config.settings import settings as private_settings, save_settings
+    except Exception:
+        raise ControlPanelError("مدیریت تلگرام (خصوصی) در این استقرار فعال نیست.", status=501)
+
+    changes: List[str] = []
+    modified = False
+
+    def _update_time_pair(key: str, value: Dict[str, Any], label: str) -> None:
+        nonlocal modified
+        if not isinstance(value, dict):
+            raise ControlPanelError(f"ساختار {label} نامعتبر است.")
+        start = _normalize_time(value.get("start"), f"شروع {label}")
+        end = _normalize_time(value.get("end"), f"پایان {label}")
+        private_settings[key] = {"start": start, "end": end}
+        modified = True
+        changes.append(label)
+
+    def _ensure_minutes(value: Any, label: str) -> int:
+        try:
+            minutes = int(str(value).strip())
+        except Exception:
+            raise ControlPanelError(f"{label} باید به‌صورت عددی باشد.")
+        if minutes <= 0:
+            raise ControlPanelError(f"{label} باید بزرگتر از صفر باشد.")
+        return minutes
+
+    if "dmEnabled" in payload:
+        private_settings["dm_enabled"] = bool(payload.get("dmEnabled"))
+        changes.append("پاسخ‌گویی پیام خصوصی")
+        modified = True
+
+    if "dataSource" in payload:
+        ds = str(payload.get("dataSource") or "").lower()
+        if ds not in {"sql", "excel"}:
+            raise ControlPanelError("منبع داده تنها می‌تواند sql یا excel باشد.")
+        private_settings["data_source"] = ds
+        changes.append("منبع داده تلگرام (خصوصی)")
+        modified = True
+
+    if "excelFile" in payload:
+        private_settings["excel_file"] = str(payload.get("excelFile") or "")
+        changes.append("فایل اکسل")
+        modified = True
+
+    if "cacheDurationMinutes" in payload:
+        raw_minutes = payload.get("cacheDurationMinutes")
+        if raw_minutes in (None, ""):
+            if private_settings.get("cache_duration_minutes") is not None:
+                private_settings["cache_duration_minutes"] = None
+                modified = True
+                changes.append("بازه تازه‌سازی کش")
+        else:
+            minutes = _ensure_minutes(raw_minutes, "مدت کش")
+            if private_settings.get("cache_duration_minutes") != minutes:
+                private_settings["cache_duration_minutes"] = minutes
+                modified = True
+                changes.append("بازه تازه‌سازی کش")
+
+    if "workingHours" in payload:
+        _update_time_pair("working_hours", payload.get("workingHours"), "ساعات کاری")
+
+    if "thursdayHours" in payload:
+        _update_time_pair("thursday_hours", payload.get("thursdayHours"), "ساعات پنج‌شنبه")
+
+    if "disableFriday" in payload:
+        private_settings["disable_friday"] = bool(payload.get("disableFriday"))
+        changes.append("وضعیت جمعه")
+        modified = True
+
+    if "lunchBreak" in payload:
+        _update_time_pair("lunch_break", payload.get("lunchBreak"), "بازه ناهار")
+
+    if "queryLimit" in payload:
+        value = payload.get("queryLimit")
+        if value in (None, ""):
+            private_settings["query_limit"] = None
+        else:
+            limit = _ensure_minutes(value, "محدودیت استعلام")
+            private_settings["query_limit"] = limit
+        changes.append("محدودیت استعلام خصوصی")
+        modified = True
+
+    if "deliveryInfo" in payload:
+        info = payload.get("deliveryInfo") or {}
+        if not isinstance(info, dict):
+            raise ControlPanelError("ساختار تنظیمات تحویل تلگرام (خصوصی) نامعتبر است.")
+        before_text = str(info.get("before") or "").strip()
+        after_text = str(info.get("after") or "").strip()
+        delivery_settings = private_settings.setdefault("delivery_info", {})
+        delivery_settings["before_15"] = before_text
+        delivery_settings["after_15"] = after_text
+        changes.append("متن تحویل تلگرام (خصوصی)")
+        modified = True
+
+    if "changeoverHour" in payload:
+        private_settings["changeover_hour"] = _normalize_time(
+            payload.get("changeoverHour"), "ساعت تغییر متن"
+        )
+        modified = True
+
+    def _parse_id(value: Any, label: str) -> Optional[int]:
+        if value in (None, ""):
+            return None
+        try:
+            return int(str(value).strip())
+        except Exception:
+            raise ControlPanelError(f"{label} باید عددی باشد.")
+
+    if "groups" in payload and isinstance(payload.get("groups"), dict):
+        groups = payload.get("groups")
+        private_settings["main_group_id"] = _parse_id(groups.get("main"), "گروه اصلی")
+        private_settings["new_group_id"] = _parse_id(groups.get("new"), "گروه جدید")
+
+        def _parse_list(values: Any, label: str) -> List[int]:
+            if values in (None, ""):
+                return []
+            if isinstance(values, str):
+                values = [item.strip() for item in values.split(",") if item.strip()]
+            if not isinstance(values, list):
+                raise ControlPanelError(f"ساختار {label} نامعتبر است.")
+            result: List[int] = []
+            for item in values:
+                result.append(_parse_id(item, label) or 0)
+            return [val for val in result if val]
+
+        private_settings["admin_group_ids"] = _parse_list(groups.get("admin"), "گروه‌های مدیریت")
+        private_settings["secondary_group_ids"] = _parse_list(
+            groups.get("secondary"), "گروه‌های فرعی"
+        )
+        modified = True
+        changes.append("گروه‌های تلگرام (خصوصی)")
+
+    if modified:
+        try:
+            save_settings()
+        except Exception as exc:
+            LOGGER.exception("Failed to persist private Telegram settings: %s", exc)
+            raise ControlPanelError("ذخیره‌سازی تنظیمات تلگرام (خصوصی) با خطا مواجه شد.", status=500)
+
+    return _load_private_settings_snapshot(), changes
 
 
 def _order_weekly_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -583,6 +831,8 @@ def _build_status_snapshot() -> Dict[str, Any]:
         },
     }
 
+    private_status = runtime.get_private_status_snapshot()
+
     return {
         "active": enabled,
         "message": message,
@@ -593,6 +843,7 @@ def _build_status_snapshot() -> Dict[str, Any]:
         "platforms": platforms,
         "operations": operations,
         "dataSource": "live",
+        "privateTelegram": private_status,
     }
 
 
@@ -752,6 +1003,7 @@ def get_settings() -> Dict[str, Any]:
             {"before": "", "after": "", "changeover": None},
         ),
         "dataSource": status.get("dataSource", "live"),
+        "privateTelegram": _load_private_settings_snapshot(),
     }
 
 
@@ -869,6 +1121,15 @@ def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
         set_setting(CHANGEOVER_KEY, changeover_value)
         changes.append("اطلاعات تحویل")
 
+    private_snapshot = None
+    private_payload = payload.get("privateTelegram")
+    if isinstance(private_payload, dict):
+        private_snapshot, private_changes = _update_private_settings(private_payload)
+        if private_changes:
+            changes.extend(private_changes)
+        else:
+            changes.append("تنظیمات تلگرام (خصوصی)")
+
     if changes:
         unique_changes = []
         for item in changes:
@@ -877,7 +1138,10 @@ def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
         details = "، ".join(unique_changes)
         _append_audit_event("به‌روزرسانی تنظیمات", details=details)
 
-    return get_settings()
+    updated = get_settings()
+    if private_snapshot is not None:
+        updated["privateTelegram"] = private_snapshot
+    return updated
 
 
 def toggle_bot(active: bool) -> Dict[str, Any]:

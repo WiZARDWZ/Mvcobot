@@ -13,6 +13,13 @@ except Exception as exc:  # pragma: no cover - optional dependency
     LOGGER.warning("WhatsApp controller unavailable: %s", exc)
     wa_controller = None
 
+try:  # pragma: no cover - optional dependency
+    from privateTelegram.manager import private_controller, get_runtime_snapshot as get_private_runtime_snapshot
+except Exception as exc:  # pragma: no cover
+    LOGGER.warning("Private Telegram controller unavailable: %s", exc)
+    private_controller = None
+
+
 _EVENT_LOOP: Optional[asyncio.AbstractEventLoop] = None
 _PENDING_WA_STATE: Optional[bool] = None
 _LAST_WA_STATE: Optional[bool] = None
@@ -25,6 +32,12 @@ def register_event_loop(loop: asyncio.AbstractEventLoop) -> None:
     if _PENDING_WA_STATE is not None:
         state = _PENDING_WA_STATE
         _apply_whatsapp_state(state)
+
+    if private_controller is not None:
+        try:
+            private_controller.attach_loop(loop)
+        except Exception as exc:  # pragma: no cover
+            LOGGER.debug("Failed to attach loop to private controller: %s", exc)
 
 
 def _submit_to_loop(coro: Coroutine[Any, Any, Any]) -> None:
@@ -88,6 +101,13 @@ def apply_platform_states(platforms: Dict[str, bool], *, active: bool) -> None:
     whatsapp_enabled = bool(platforms.get("whatsapp", True)) and active
     _apply_whatsapp_state(whatsapp_enabled)
 
+    private_enabled = bool(platforms.get("telegram_private", True)) and active
+    if private_controller is not None:
+        try:
+            private_controller.set_enabled(private_enabled)
+        except Exception as exc:  # pragma: no cover - best effort
+            LOGGER.warning("Failed to apply private Telegram state: %s", exc)
+
 
 def refresh_working_hours_cache() -> None:
     """Ask the WhatsApp controller to reload working-hour settings."""
@@ -97,3 +117,25 @@ def refresh_working_hours_cache() -> None:
         wa_controller.refresh_working_hours()
     except Exception as exc:  # pragma: no cover - best-effort refresh
         LOGGER.debug("Skipping WhatsApp working-hours refresh: %s", exc)
+
+
+def get_private_status_snapshot() -> Dict[str, Any]:
+    if private_controller is None:
+        return {
+            "enabled": False,
+            "dmEnabled": False,
+            "dataSource": "unavailable",
+            "cache": {"lastUpdatedISO": None, "records": 0},
+            "totalQueries": 0,
+        }
+    try:
+        return get_private_runtime_snapshot()
+    except Exception as exc:  # pragma: no cover - best effort only
+        LOGGER.debug("Failed to fetch private Telegram snapshot: %s", exc)
+        return {
+            "enabled": False,
+            "dmEnabled": False,
+            "dataSource": "unknown",
+            "cache": {"lastUpdatedISO": None, "records": 0},
+            "totalQueries": 0,
+        }
