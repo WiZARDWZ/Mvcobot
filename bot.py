@@ -5,6 +5,7 @@ import re
 import os
 import sys
 import time
+import threading
 from datetime import datetime
 
 from telegram.ext import (
@@ -396,6 +397,27 @@ def main():
         print(f"[WebControl] Control panel serving on port {port}")
     else:
         print("[WebControl] Control panel server failed to start.")
+
+    # --- Start the legacy private Telegram bot alongside MVCO bot
+    def _run_private_bot():
+        try:
+            from privateTelegram import main as private_main
+        except Exception as exc:
+            logging.error("Failed to import privateTelegram bot: %s", exc, exc_info=True)
+            return
+
+        try:
+            asyncio.run(private_main.main())
+        except Exception as exc:
+            logging.error("privateTelegram bot exited with error: %s", exc, exc_info=True)
+
+    private_bot_thread = threading.Thread(
+        target=_run_private_bot,
+        name="private-telegram-bot",
+        daemon=True,
+    )
+    private_bot_thread.start()
+    logging.info("privateTelegram bot thread started (daemon mode).")
 
     app = _build_application()
     try:
