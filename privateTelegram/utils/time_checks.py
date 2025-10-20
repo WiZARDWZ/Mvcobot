@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from config.settings import settings
 from utils.state import sent_messages
-from telegram.client import NEW_GROUP_ID
+from telegram.client import get_new_group_id
 
 TZ = ZoneInfo("Asia/Tehran")
 
@@ -37,7 +37,7 @@ def is_within_active_hours():
     return ws <= now < we
 
 def is_recently_sent(user_id, code, group_id):
-    if group_id == NEW_GROUP_ID:
+    if group_id == get_new_group_id():
         return False
     key = f"{user_id}:{code}"
     last = sent_messages.get(key)
