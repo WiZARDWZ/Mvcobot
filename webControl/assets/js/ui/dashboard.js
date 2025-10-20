@@ -51,8 +51,9 @@ function buildChart(container, metrics) {
   container.appendChild(canvas);
   const ctx = canvas.getContext('2d');
   const labels = metrics.monthly.map((item) => item.month);
-  const telegramData = metrics.monthly.map((item) => item.telegram);
-  const whatsappData = metrics.monthly.map((item) => item.whatsapp);
+  const telegramData = metrics.monthly.map((item) => item.telegram ?? 0);
+  const whatsappData = metrics.monthly.map((item) => item.whatsapp ?? 0);
+  const telegramPrivateData = metrics.monthly.map((item) => item.telegram_private ?? 0);
 
   chartInstance = new window.Chart(ctx, {
     type: 'bar',
@@ -69,6 +70,12 @@ function buildChart(container, metrics) {
           label: 'واتساپ',
           data: whatsappData,
           backgroundColor: 'rgba(34, 197, 94, 0.6)',
+          borderRadius: 6,
+        },
+        {
+          label: 'تلگرام (خصوصی)',
+          data: telegramPrivateData,
+          backgroundColor: 'rgba(234, 179, 8, 0.55)',
           borderRadius: 6,
         },
       ],
@@ -144,9 +151,10 @@ export async function mount(container) {
   function updateUI(data) {
     clearChildren(statsGrid);
     statsGrid.append(
-      renderStatsCard({ label: 'کل مکالمات', value: data.totals.all }),
-      renderStatsCard({ label: 'تلگرام', value: data.totals.telegram }),
-      renderStatsCard({ label: 'واتساپ', value: data.totals.whatsapp })
+      renderStatsCard({ label: 'کل مکالمات', value: data.totals.all ?? 0 }),
+      renderStatsCard({ label: 'تلگرام', value: data.totals.telegram ?? 0 }),
+      renderStatsCard({ label: 'واتساپ', value: data.totals.whatsapp ?? 0 }),
+      renderStatsCard({ label: 'تلگرام (خصوصی)', value: data.totals.telegram_private ?? 0 })
     );
 
     clearChildren(chartContainer);
@@ -189,6 +197,7 @@ export async function mount(container) {
     [
       ['telegram', 'تلگرام'],
       ['whatsapp', 'واتساپ'],
+      ['telegram_private', 'تلگرام (خصوصی)'],
     ].forEach(([key, label]) => {
       const wrapper = createElement('span', { classes: ['status-row__platform'] });
       const badge = createBadge(platforms[key] ? 'فعال' : 'غیرفعال', platforms[key] ? 'success' : 'danger');
@@ -241,7 +250,35 @@ export async function mount(container) {
       workingHoursList
     );
 
-    statusContent.append(
+    const privateInfo = data.status.privateTelegram ?? null;
+    let privateRow = null;
+    if (privateInfo) {
+      privateRow = createElement('div', { classes: ['status-row__item'] });
+      const valueWrapper = createElement('div', {
+        classes: ['status-row__value', 'status-row__value--multiline'],
+      });
+      valueWrapper.append(
+        createElement('span', {
+          text: `وضعیت: ${privateInfo.enabled ? 'فعال' : 'غیرفعال'}`,
+        }),
+        createElement('span', {
+          text: `پیام خصوصی: ${privateInfo.dmEnabled ? 'فعال' : 'خاموش'}`,
+        }),
+        createElement('span', {
+          text: `منبع داده: ${privateInfo.dataSource === 'excel' ? 'اکسل' : 'SQL Server'}`,
+        })
+      );
+      if (privateInfo.cache?.lastUpdatedISO) {
+        valueWrapper.append(
+          createElement('span', {
+            text: `کش: ${formatRelativeTime(privateInfo.cache.lastUpdatedISO)}`,
+          })
+        );
+      }
+      privateRow.append(createElement('span', { text: 'تلگرام (خصوصی)' }), valueWrapper);
+    }
+
+    const rows = [
       statusRow,
       messageRow,
       platformsRow,
@@ -249,8 +286,12 @@ export async function mount(container) {
       lunchRow,
       queryRow,
       deliveryRow,
-      workingHoursWrapper
-    );
+      workingHoursWrapper,
+    ];
+    if (privateRow) {
+      rows.splice(3, 0, privateRow);
+    }
+    statusContent.append(...rows);
   }
 
   await fetchData();
