@@ -1,12 +1,12 @@
 import asyncio
 import logging
 
-from telegram.client import client
-from config.settings import settings
-from cache.updater import update_cache_periodically
+from privateTelegram.telegram.client import client
+from privateTelegram.config.settings import settings
+from privateTelegram.cache.updater import update_cache_periodically
 
 # Register handlers so decorators take effect
-from telegram.handlers import messages, admin
+from privateTelegram.telegram.handlers import messages, admin
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 

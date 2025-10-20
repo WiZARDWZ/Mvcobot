@@ -218,6 +218,196 @@ export async function mount(container) {
 
   operationsCard.append(lunchGroup, queryGroup, deliveryGroup);
 
+  const privateCard = createElement('div', { classes: ['card'] });
+  privateCard.append(
+    createElement('h4', { classes: ['section-heading__title'], text: 'تلگرام (خصوصی)' })
+  );
+
+  const privateForm = createElement('form', { classes: ['settings-form'] });
+  const privateGrid = createElement('div', { classes: ['form-grid'] });
+
+  const privateDmControl = createElement('div', { classes: ['form-control'] });
+  privateDmControl.append(createElement('label', { text: 'پاسخ خودکار پیام خصوصی' }));
+  const privateDmToggle = createToggle({ id: 'private-dm-toggle', checked: true });
+  privateDmControl.append(privateDmToggle.wrapper);
+
+  const privateDataSourceControl = createElement('div', { classes: ['form-control'] });
+  privateDataSourceControl.append(createElement('label', { text: 'منبع داده' }));
+  const privateDataSourceSelect = createElement('select', {
+    attrs: { id: 'private-data-source', name: 'private-data-source' },
+  });
+  ['sql', 'excel'].forEach((value) => {
+    const option = createElement('option', {
+      attrs: { value },
+      text: value === 'excel' ? 'Excel' : 'SQL Server',
+    });
+    privateDataSourceSelect.append(option);
+  });
+  privateDataSourceControl.append(privateDataSourceSelect);
+
+  const privateExcelControl = createElement('div', { classes: ['form-control'] });
+  privateExcelControl.append(
+    createElement('label', { attrs: { for: 'private-excel-file' }, text: 'فایل اکسل' })
+  );
+  const privateExcelInput = createElement('input', {
+    attrs: { type: 'text', id: 'private-excel-file', placeholder: 'inventory.xlsx' },
+  });
+  privateExcelControl.append(privateExcelInput);
+
+  const privateCacheControl = createElement('div', { classes: ['form-control'] });
+  privateCacheControl.append(
+    createElement('label', { attrs: { for: 'private-cache-minutes' }, text: 'بازه به‌روزرسانی کش (دقیقه)' })
+  );
+  const privateCacheInput = createElement('input', {
+    attrs: { type: 'number', id: 'private-cache-minutes', min: '1', step: '1' },
+  });
+  privateCacheControl.append(privateCacheInput);
+
+  const privateWorkingStart = createElement('input', {
+    attrs: { type: 'time', id: 'private-working-start' },
+  });
+  const privateWorkingEnd = createElement('input', {
+    attrs: { type: 'time', id: 'private-working-end' },
+  });
+  const privateWorkingControl = createElement('div', { classes: ['form-control'] });
+  privateWorkingControl.append(createElement('label', { text: 'ساعات کاری (شنبه تا چهارشنبه)' }));
+  const privateWorkingRow = createElement('div', { classes: ['input-row'] });
+  privateWorkingRow.append(
+    createElement('span', { text: 'از' }),
+    privateWorkingStart,
+    createElement('span', { text: 'تا' }),
+    privateWorkingEnd
+  );
+  privateWorkingControl.append(privateWorkingRow);
+
+  const privateThursdayStart = createElement('input', {
+    attrs: { type: 'time', id: 'private-thursday-start' },
+  });
+  const privateThursdayEnd = createElement('input', {
+    attrs: { type: 'time', id: 'private-thursday-end' },
+  });
+  const privateThursdayControl = createElement('div', { classes: ['form-control'] });
+  privateThursdayControl.append(createElement('label', { text: 'ساعات کاری پنج‌شنبه' }));
+  const privateThursdayRow = createElement('div', { classes: ['input-row'] });
+  privateThursdayRow.append(
+    createElement('span', { text: 'از' }),
+    privateThursdayStart,
+    createElement('span', { text: 'تا' }),
+    privateThursdayEnd
+  );
+  privateThursdayControl.append(privateThursdayRow);
+
+  const privateFridayControl = createElement('div', { classes: ['form-control'] });
+  privateFridayControl.append(createElement('label', { text: 'فعال بودن روز جمعه' }));
+  const privateFridayToggle = createToggle({ id: 'private-friday-toggle', checked: false });
+  privateFridayControl.append(privateFridayToggle.wrapper);
+
+  const privateLunchStart = createElement('input', {
+    attrs: { type: 'time', id: 'private-lunch-start' },
+  });
+  const privateLunchEnd = createElement('input', {
+    attrs: { type: 'time', id: 'private-lunch-end' },
+  });
+  const privateLunchControl = createElement('div', { classes: ['form-control'] });
+  privateLunchControl.append(createElement('label', { text: 'استراحت ناهار' }));
+  const privateLunchRow = createElement('div', { classes: ['input-row'] });
+  privateLunchRow.append(
+    createElement('span', { text: 'از' }),
+    privateLunchStart,
+    createElement('span', { text: 'تا' }),
+    privateLunchEnd
+  );
+  privateLunchControl.append(privateLunchRow);
+
+  const privateQueryControl = createElement('div', { classes: ['form-control'] });
+  privateQueryControl.append(
+    createElement('label', { attrs: { for: 'private-query-limit' }, text: 'محدودیت استعلام (در ۲۴ ساعت)' })
+  );
+  const privateQueryInput = createElement('input', {
+    attrs: { type: 'number', id: 'private-query-limit', min: '0', step: '1' },
+  });
+  privateQueryControl.append(privateQueryInput);
+
+  const privateDeliveryBefore = createElement('textarea', {
+    attrs: { id: 'private-delivery-before', rows: '3' },
+  });
+  const privateDeliveryAfter = createElement('textarea', {
+    attrs: { id: 'private-delivery-after', rows: '3' },
+  });
+  const privateDeliveryControl = createElement('div', { classes: ['form-control'] });
+  privateDeliveryControl.append(createElement('label', { text: 'متن تحویل' }));
+  const privateDeliveryColumn = createElement('div', { classes: ['input-column'] });
+  privateDeliveryColumn.append(
+    createElement('label', { attrs: { for: 'private-delivery-before' }, text: 'قبل از ساعت تعیین‌شده' }),
+    privateDeliveryBefore,
+    createElement('label', { attrs: { for: 'private-delivery-after' }, text: 'بعد از ساعت تعیین‌شده' }),
+    privateDeliveryAfter
+  );
+  privateDeliveryControl.append(privateDeliveryColumn);
+
+  const privateChangeoverInput = createElement('input', {
+    attrs: { type: 'time', id: 'private-changeover' },
+  });
+  const privateChangeoverControl = createElement('div', { classes: ['form-control'] });
+  privateChangeoverControl.append(
+    createElement('label', { attrs: { for: 'private-changeover' }, text: 'ساعت تغییر متن تحویل' }),
+    privateChangeoverInput
+  );
+
+  const privateMainGroupInput = createElement('input', {
+    attrs: { type: 'number', id: 'private-main-group' },
+  });
+  const privateNewGroupInput = createElement('input', {
+    attrs: { type: 'number', id: 'private-new-group' },
+  });
+  const privateAdminInput = createElement('textarea', {
+    attrs: { id: 'private-admin-groups', rows: '2', placeholder: 'شناسه‌ها را با ویرگول جدا کنید' },
+  });
+  const privateSecondaryInput = createElement('textarea', {
+    attrs: { id: 'private-secondary-groups', rows: '2', placeholder: 'شناسه‌ها را با ویرگول جدا کنید' },
+  });
+
+  const privateGroupsControl = createElement('div', { classes: ['form-control'] });
+  privateGroupsControl.append(createElement('label', { text: 'گروه‌ها' }));
+  const privateGroupsColumn = createElement('div', { classes: ['input-column'] });
+  privateGroupsColumn.append(
+    createElement('label', { attrs: { for: 'private-main-group' }, text: 'گروه اصلی' }),
+    privateMainGroupInput,
+    createElement('label', { attrs: { for: 'private-new-group' }, text: 'گروه جست‌وجو' }),
+    privateNewGroupInput,
+    createElement('label', { attrs: { for: 'private-admin-groups' }, text: 'گروه‌های مدیریت' }),
+    privateAdminInput,
+    createElement('label', { attrs: { for: 'private-secondary-groups' }, text: 'گروه‌های فرعی' }),
+    privateSecondaryInput
+  );
+  privateGroupsControl.append(privateGroupsColumn);
+
+  privateGrid.append(
+    privateDmControl,
+    privateDataSourceControl,
+    privateExcelControl,
+    privateCacheControl,
+    privateWorkingControl,
+    privateThursdayControl,
+    privateFridayControl,
+    privateLunchControl,
+    privateQueryControl,
+    privateChangeoverControl,
+    privateDeliveryControl,
+    privateGroupsControl
+  );
+
+  privateForm.append(privateGrid);
+  const privateActions = createElement('div', { classes: ['form-actions'] });
+  const privateSubmit = createElement('button', {
+    classes: ['btn', 'btn--primary'],
+    attrs: { type: 'submit' },
+    text: 'ذخیره تنظیمات تلگرام (خصوصی)',
+  });
+  privateActions.append(privateSubmit);
+  privateForm.append(privateActions);
+  privateCard.append(privateForm);
+
   const platformCard = createElement('div', { classes: ['card'] });
   platformCard.append(
     createElement('h4', { classes: ['section-heading__title'], text: 'پلتفرم‌های فعال' })
@@ -246,6 +436,7 @@ export async function mount(container) {
     header,
     workingHoursCard,
     operationsCard,
+    privateCard,
     platformCard,
     cacheCard,
     loadingState
@@ -297,6 +488,39 @@ export async function mount(container) {
     changeoverInput.value = deliveryInfo.changeover ?? '';
 
     renderPlatformToggles(settings.platforms ?? {});
+
+    const privateSettings = settings.privateTelegram ?? {};
+    privateDmToggle.input.checked = Boolean(privateSettings.dmEnabled ?? true);
+    privateDataSourceSelect.value = privateSettings.dataSource ?? 'sql';
+    privateExcelInput.value = privateSettings.excelFile ?? '';
+    privateCacheInput.value =
+      privateSettings.cacheDurationMinutes && privateSettings.cacheDurationMinutes > 0
+        ? privateSettings.cacheDurationMinutes
+        : '';
+    privateWorkingStart.value = privateSettings.workingHours?.start ?? '';
+    privateWorkingEnd.value = privateSettings.workingHours?.end ?? '';
+    privateThursdayStart.value = privateSettings.thursdayHours?.start ?? '';
+    privateThursdayEnd.value = privateSettings.thursdayHours?.end ?? '';
+    privateFridayToggle.input.checked = !Boolean(privateSettings.disableFriday);
+    privateLunchStart.value = privateSettings.lunchBreak?.start ?? '';
+    privateLunchEnd.value = privateSettings.lunchBreak?.end ?? '';
+    if (typeof privateSettings.queryLimit === 'number' && privateSettings.queryLimit > 0) {
+      privateQueryInput.value = privateSettings.queryLimit;
+    } else {
+      privateQueryInput.value = '';
+    }
+    privateDeliveryBefore.value = privateSettings.deliveryInfo?.before ?? '';
+    privateDeliveryAfter.value = privateSettings.deliveryInfo?.after ?? '';
+    privateChangeoverInput.value = privateSettings.changeoverHour ?? '';
+    privateMainGroupInput.value = privateSettings.groups?.main ?? '';
+    privateNewGroupInput.value = privateSettings.groups?.new ?? '';
+    privateAdminInput.value = Array.isArray(privateSettings.groups?.admin)
+      ? privateSettings.groups.admin.join(', ')
+      : '';
+    privateSecondaryInput.value = Array.isArray(privateSettings.groups?.secondary)
+      ? privateSettings.groups.secondary.join(', ')
+      : '';
+    updatePrivateExcelVisibility();
   }
 
   const onWorkingHoursSubmit = async (event) => {
@@ -390,6 +614,93 @@ export async function mount(container) {
   };
   deliveryForm.addEventListener('submit', onDeliverySubmit);
 
+  function parseGroupList(text) {
+    if (!text) return [];
+    return text
+      .split(/[,\n]/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => Number.parseInt(item, 10))
+      .filter((val) => !Number.isNaN(val));
+  }
+
+  function updatePrivateExcelVisibility() {
+    privateExcelControl.style.display = privateDataSourceSelect.value === 'excel' ? '' : 'none';
+  }
+  privateDataSourceSelect.addEventListener('change', updatePrivateExcelVisibility);
+
+  const onPrivateSubmit = async (event) => {
+    event.preventDefault();
+    const dataSource = privateDataSourceSelect.value || 'sql';
+    const cacheMinutesRaw = privateCacheInput.value.trim();
+    let cacheMinutes = null;
+    if (cacheMinutesRaw) {
+      const parsed = Number.parseInt(cacheMinutesRaw, 10);
+      if (Number.isNaN(parsed) || parsed <= 0) {
+        renderToast({ message: 'بازه کش باید عددی بزرگتر از صفر باشد.', type: 'error' });
+        return;
+      }
+      cacheMinutes = parsed;
+    }
+
+    const queryLimitRaw = privateQueryInput.value.trim();
+    let privateQuery = null;
+    if (queryLimitRaw) {
+      const parsed = Number.parseInt(queryLimitRaw, 10);
+      if (Number.isNaN(parsed) || parsed < 0) {
+        renderToast({ message: 'محدودیت استعلام نامعتبر است.', type: 'error' });
+        return;
+      }
+      privateQuery = parsed;
+    }
+
+    const payload = {
+      privateTelegram: {
+        dmEnabled: privateDmToggle.input.checked,
+        dataSource,
+        excelFile: privateExcelInput.value.trim(),
+        cacheDurationMinutes: cacheMinutes,
+        workingHours: {
+          start: privateWorkingStart.value || null,
+          end: privateWorkingEnd.value || null,
+        },
+        thursdayHours: {
+          start: privateThursdayStart.value || null,
+          end: privateThursdayEnd.value || null,
+        },
+        disableFriday: !privateFridayToggle.input.checked,
+        lunchBreak: {
+          start: privateLunchStart.value || null,
+          end: privateLunchEnd.value || null,
+        },
+        queryLimit: privateQuery,
+        deliveryInfo: {
+          before: privateDeliveryBefore.value.trim(),
+          after: privateDeliveryAfter.value.trim(),
+        },
+        changeoverHour: privateChangeoverInput.value || null,
+        groups: {
+          main: privateMainGroupInput.value || null,
+          new: privateNewGroupInput.value || null,
+          admin: parseGroupList(privateAdminInput.value),
+          secondary: parseGroupList(privateSecondaryInput.value),
+        },
+      },
+    };
+
+    try {
+      privateSubmit.disabled = true;
+      settings = await api.updateSettings(payload);
+      applySettings();
+      renderToast({ message: 'تنظیمات تلگرام (خصوصی) ذخیره شد.' });
+    } catch (error) {
+      renderToast({ message: error.message, type: 'error' });
+    } finally {
+      privateSubmit.disabled = false;
+    }
+  };
+  privateForm.addEventListener('submit', onPrivateSubmit);
+
   function renderPlatformToggles(platforms) {
     platformList.innerHTML = '';
     const telegramToggle = createToggle({
@@ -404,13 +715,21 @@ export async function mount(container) {
       label: 'واتساپ',
       onChange: (checked) => handlePlatformChange('whatsapp', checked, whatsappToggle.input),
     });
+    const privateToggle = createToggle({
+      id: 'private-telegram-toggle',
+      checked: platforms.telegram_private ?? true,
+      label: 'تلگرام (خصوصی)',
+      onChange: (checked) => handlePlatformChange('telegram_private', checked, privateToggle.input),
+    });
 
     const telegramRow = createElement('div', { classes: ['status-row__item'] });
     telegramRow.append(createElement('span', { text: 'تلگرام' }), telegramToggle.wrapper);
     const whatsappRow = createElement('div', { classes: ['status-row__item'] });
     whatsappRow.append(createElement('span', { text: 'واتساپ' }), whatsappToggle.wrapper);
+    const privateRow = createElement('div', { classes: ['status-row__item'] });
+    privateRow.append(createElement('span', { text: 'تلگرام (خصوصی)' }), privateToggle.wrapper);
 
-    platformList.append(telegramRow, whatsappRow);
+    platformList.append(telegramRow, whatsappRow, privateRow);
   }
 
   async function handlePlatformChange(platform, checked, inputEl) {
@@ -426,7 +745,13 @@ export async function mount(container) {
         ...(window.APP_CONFIG ?? {}),
         [`${platform.toUpperCase()}_ENABLED`]: checked,
       };
-      renderToast({ message: `پلتفرم ${platform === 'telegram' ? 'تلگرام' : 'واتساپ'} ${checked ? 'فعال' : 'غیرفعال'} شد.` });
+      const platformLabels = {
+        telegram: 'تلگرام',
+        whatsapp: 'واتساپ',
+        telegram_private: 'تلگرام (خصوصی)',
+      };
+      const platformLabel = platformLabels[platform] ?? platform;
+      renderToast({ message: `پلتفرم ${platformLabel} ${checked ? 'فعال' : 'غیرفعال'} شد.` });
     } catch (error) {
       renderToast({ message: error.message, type: 'error' });
       inputEl.checked = !checked;
@@ -459,6 +784,8 @@ export async function mount(container) {
       lunchForm.removeEventListener('submit', onLunchSubmit);
       queryForm.removeEventListener('submit', onQuerySubmit);
       deliveryForm.removeEventListener('submit', onDeliverySubmit);
+      privateForm.removeEventListener('submit', onPrivateSubmit);
+      privateDataSourceSelect.removeEventListener('change', updatePrivateExcelVisibility);
       invalidateButton.removeEventListener('click', onInvalidateClick);
       dayControls.forEach((control) => control.dispose?.());
     },

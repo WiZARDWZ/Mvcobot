@@ -1,14 +1,14 @@
 import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from config.settings import settings
-import utils.state as state
-from processor.transformer import process_data
+from privateTelegram.config.settings import settings
+from privateTelegram.utils import state
+from privateTelegram.processor.transformer import process_data
 
 # SQL Server connector
-from db.sql_server import get_sql_data
+from privateTelegram.db.sql_server import get_sql_data
 # Excel connector
-from db.excel_connector import get_excel_data
+from privateTelegram.db.excel_connector import get_excel_data
 
 TZ = ZoneInfo("Asia/Tehran")
 

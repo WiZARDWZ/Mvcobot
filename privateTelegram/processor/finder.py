@@ -1,5 +1,5 @@
-from cache.updater import get_cached_data
-from utils.formatting import normalize_code
+from privateTelegram.cache.updater import get_cached_data
+from privateTelegram.utils.formatting import normalize_code
 
 ORIGINAL_BRANDS = ["MOBIS", "GENUINE"]
 

@@ -1,7 +1,7 @@
 # processor/transformer.py
 
 import pandas as pd
-from processor.extractor import extract_brand_and_part, replace_partial_code
+from privateTelegram.processor.extractor import extract_brand_and_part, replace_partial_code
 
 def process_row(row):
     records = []

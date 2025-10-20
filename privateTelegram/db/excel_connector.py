@@ -1,5 +1,5 @@
 import pandas as pd
-from config.settings import settings
+from privateTelegram.config.settings import settings
 
 def get_excel_data():
     """

@@ -5,17 +5,24 @@ from zoneinfo import ZoneInfo
 
 from telethon import events
 from telethon.tl.custom import Message
-from telegram.client import client, MAIN_GROUP_ID, NEW_GROUP_ID, ADMIN_GROUP_IDS
 
-from config.settings import settings
-from utils.time_checks import is_within_active_hours
-import utils.state as state
-from utils.formatting import (
+from privateTelegram.telegram.client import (
+    client,
+    get_admin_group_ids,
+    get_main_group_id,
+    get_new_group_id,
+    get_secondary_group_ids,
+)
+
+from privateTelegram.config.settings import settings
+from privateTelegram.utils.time_checks import is_within_active_hours
+from privateTelegram.utils import state
+from privateTelegram.utils.formatting import (
     normalize_code,
     fix_part_number_display,
     escape_markdown,
 )
-from processor.finder import find_similar_products, find_partial_matches
+from privateTelegram.processor.finder import find_similar_products, find_partial_matches
 
 TZ = ZoneInfo("Asia/Tehran")
 
@@ -26,7 +33,6 @@ TOKEN_PATTERN   = re.compile(r'[A-Za-z0-9]{5}[-_/\. ]?[A-Za-z0-9]{1,5}')
 CLEAN_CTRL      = re.compile(r'[\u2066-\u2069\u200E-\u200F\u202A-\u202E\u200B]')
 
 # ───────────────────────── Config lists ────────────────────────────
-LISTEN_CHATS        = [MAIN_GROUP_ID, NEW_GROUP_ID] + ADMIN_GROUP_IDS
 ESCALATION_GROUP_ID = -4718450399  # شناسه گروه Escalation
 
 EXCLUDED = {
@@ -35,12 +41,38 @@ EXCLUDED = {
 }
 
 # ────────────────────────── Main handler (Groups) ───────────────────────────
-@client.on(events.NewMessage(chats=LISTEN_CHATS))
+def _listen_chat_ids() -> set[int]:
+    ids = set()
+    main_id = get_main_group_id()
+    new_id = get_new_group_id()
+    if main_id:
+        ids.add(main_id)
+    if new_id:
+        ids.add(new_id)
+    ids.update(get_admin_group_ids())
+    ids.update(get_secondary_group_ids())
+    return {int(chat_id) for chat_id in ids if chat_id}
+
+
+def _should_handle_group(event: Message) -> bool:
+    try:
+        if event.is_private:
+            return False
+        return int(event.chat_id or 0) in _listen_chat_ids()
+    except Exception:
+        return False
+
+
+def _admin_ids_set() -> set[int]:
+    return {int(i) for i in get_admin_group_ids()}
+
+
+@client.on(events.NewMessage(func=_should_handle_group))
 async def handle_new_message(event):
-    chat_id = event.chat_id
-    sender  = await event.get_sender()
-    user_id = sender.id
-    now_dt  = datetime.now(TZ)
+    chat_id = int(event.chat_id)
+    sender = await event.get_sender()
+    user_id = int(sender.id)
+    now_dt = datetime.now(TZ)
 
     # 1) Clean raw text
     raw  = event.raw_text or ""
@@ -56,7 +88,10 @@ async def handle_new_message(event):
     )
 
     # 4) Group-level limits
-    if chat_id == MAIN_GROUP_ID and user_id not in ADMIN_GROUP_IDS:
+    main_group_id = get_main_group_id()
+    admin_ids = _admin_ids_set()
+
+    if chat_id == main_group_id and user_id not in admin_ids:
         if not is_within_active_hours():
             return
         if now_dt - counts["start"] >= timedelta(hours=24):
@@ -122,7 +157,7 @@ async def handle_new_message(event):
             norm_full = normalize_code(full_code)
             prods = find_similar_products(norm_full)
             if prods:
-                if user_id not in ADMIN_GROUP_IDS:
+                if user_id not in admin_ids:
                     counts["count"] += 1
                 state.sent_messages[f"{user_id}:{norm_full}"] = now_dt
                 for p in prods:
@@ -132,11 +167,11 @@ async def handle_new_message(event):
         elif FULL_PATTERN.match(token):
             state.total_queries += 1
             key = f"{user_id}:{norm}"
-            if chat_id == MAIN_GROUP_ID and user_id not in ADMIN_GROUP_IDS:
+            if chat_id == main_group_id and user_id not in admin_ids:
                 last = state.sent_messages.get(key)
                 if last and now_dt - last < timedelta(minutes=30):
                     continue
-            if user_id not in ADMIN_GROUP_IDS:
+            if user_id not in admin_ids:
                 counts["count"] += 1
             state.sent_messages[key] = now_dt
             prods = find_similar_products(norm)
@@ -158,9 +193,10 @@ async def handle_private_message(event):
         return
 
     sender = await event.get_sender()
-    user_id = sender.id
-    chat_id = event.chat_id  # در PM برابر با user_id است
-    now_dt  = datetime.now(TZ)
+    user_id = int(sender.id)
+    chat_id = int(event.chat_id)  # در PM برابر با user_id است
+    now_dt = datetime.now(TZ)
+    admin_ids = _admin_ids_set()
 
     # Clean & blacklist
     raw  = event.raw_text or ""
@@ -172,11 +208,11 @@ async def handle_private_message(event):
     counts = state.user_query_counts.setdefault(
         user_id, {"count": 0, "start": now_dt}
     )
-    if not is_within_active_hours() and user_id not in ADMIN_GROUP_IDS:
+    if not is_within_active_hours() and user_id not in admin_ids:
         return
     if now_dt - counts["start"] >= timedelta(hours=24):
         counts.update({"count": 0, "start": now_dt})
-    if counts["count"] >= settings.get("query_limit", 50) and user_id not in ADMIN_GROUP_IDS:
+    if counts["count"] >= settings.get("query_limit", 50) and user_id not in admin_ids:
         return
 
     # Extract tokens
@@ -236,7 +272,7 @@ async def handle_private_message(event):
             norm_full = normalize_code(full_code)
             prods = find_similar_products(norm_full)
             if prods:
-                if user_id not in ADMIN_GROUP_IDS:
+                if user_id not in admin_ids:
                     counts["count"] += 1
                 state.sent_messages[f"{user_id}:{norm_full}"] = now_dt
                 for p in prods:
@@ -246,7 +282,7 @@ async def handle_private_message(event):
         elif FULL_PATTERN.match(token):
             state.total_queries += 1
             key = f"{user_id}:{norm}"
-            if user_id not in ADMIN_GROUP_IDS:
+            if user_id not in admin_ids:
                 last = state.sent_messages.get(key)
                 if last and now_dt - last < timedelta(minutes=30):
                     # جلوگیری از ارسال تکراری ظرف ۳۰ دقیقه

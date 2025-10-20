@@ -6,13 +6,25 @@ import os
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from telethon import events
-from telegram.client import client, ADMIN_GROUP_IDS, MAIN_GROUP_ID, NEW_GROUP_ID
-from config.settings import settings, save_settings
-import utils.state as state
+from privateTelegram.telegram.client import (
+    client,
+    get_admin_group_ids,
+    get_main_group_id,
+    get_new_group_id,
+)
+from privateTelegram.config.settings import settings, save_settings
+from privateTelegram.utils import state
 
 TZ = ZoneInfo("Asia/Tehran")
 
-@client.on(events.NewMessage(chats=ADMIN_GROUP_IDS))
+def _is_admin_message(event) -> bool:
+    try:
+        return int(event.chat_id or 0) in {int(i) for i in get_admin_group_ids()}
+    except Exception:
+        return False
+
+
+@client.on(events.NewMessage(func=_is_admin_message))
 async def handle_admin_commands(event):
     message_text = event.message.message.strip()
     lower_text = message_text.lower()
@@ -289,11 +301,11 @@ async def handle_admin_commands(event):
                     counts[disp] = counts.get(disp, 0) + 1
 
         try:
-            await scan_chat(MAIN_GROUP_ID)
+            await scan_chat(get_main_group_id())
         except Exception:
             pass
         try:
-            await scan_chat(NEW_GROUP_ID)
+            await scan_chat(get_new_group_id())
         except Exception:
             pass
 
