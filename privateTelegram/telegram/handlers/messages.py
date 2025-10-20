@@ -5,76 +5,50 @@ from zoneinfo import ZoneInfo
 
 from telethon import events
 from telethon.tl.custom import Message
-try:  # Prefer package-relative imports when running inside the package
-    from ..client import (
+try:
+    from privateTelegram.telegram.client import (
         client,
         MAIN_GROUP_ID,
         NEW_GROUP_ID,
         ADMIN_GROUP_IDS,
     )
-except ImportError:
-    try:  # Fallback to absolute package import when executed from project root
-        from privateTelegram.telegram.client import (
-            client,
-            MAIN_GROUP_ID,
-            NEW_GROUP_ID,
-            ADMIN_GROUP_IDS,
-        )
-    except ModuleNotFoundError:  # Legacy script-style execution
-        from telegram.client import (
-            client,
-            MAIN_GROUP_ID,
-            NEW_GROUP_ID,
-            ADMIN_GROUP_IDS,
-        )
+except ModuleNotFoundError:  # Legacy script-style execution
+    from telegram.client import (
+        client,
+        MAIN_GROUP_ID,
+        NEW_GROUP_ID,
+        ADMIN_GROUP_IDS,
+    )
 
 try:
-    from ...config.settings import settings
-except ImportError:
-    try:
-        from privateTelegram.config.settings import settings
-    except ModuleNotFoundError:
-        from config.settings import settings
+    from privateTelegram.config.settings import settings
+except ModuleNotFoundError:
+    from config.settings import settings
 
 try:
-    from ...utils.time_checks import is_within_active_hours
-    from ...utils import state as bot_state
-    from ...utils.formatting import (
+    from privateTelegram.utils.time_checks import is_within_active_hours
+    from privateTelegram.utils import state as bot_state
+    from privateTelegram.utils.formatting import (
         normalize_code,
         fix_part_number_display,
         escape_markdown,
     )
-except ImportError:
-    try:
-        from privateTelegram.utils.time_checks import is_within_active_hours
-        from privateTelegram.utils import state as bot_state
-        from privateTelegram.utils.formatting import (
-            normalize_code,
-            fix_part_number_display,
-            escape_markdown,
-        )
-    except ModuleNotFoundError:
-        from utils.time_checks import is_within_active_hours
-        import utils.state as bot_state
-        from utils.formatting import (
-            normalize_code,
-            fix_part_number_display,
-            escape_markdown,
-        )
+except ModuleNotFoundError:
+    from utils.time_checks import is_within_active_hours
+    import utils.state as bot_state
+    from utils.formatting import (
+        normalize_code,
+        fix_part_number_display,
+        escape_markdown,
+    )
 
 try:
-    from ...processor.finder import (
+    from privateTelegram.processor.finder import (
         find_similar_products,
         find_partial_matches,
     )
-except ImportError:
-    try:
-        from privateTelegram.processor.finder import (
-            find_similar_products,
-            find_partial_matches,
-        )
-    except ModuleNotFoundError:
-        from processor.finder import find_similar_products, find_partial_matches
+except ModuleNotFoundError:
+    from processor.finder import find_similar_products, find_partial_matches
 
 TZ = ZoneInfo("Asia/Tehran")
 
