@@ -174,6 +174,32 @@ const mockStore = {
       actor: 'کنترل‌پنل',
     },
   ],
+  privateTelegram: {
+    enabled: true,
+    dmEnabled: true,
+    apiId: 123456,
+    apiHash: 'samplehash',
+    phoneNumber: '+989120000000',
+    dataSource: 'sql',
+    excelFile: 'inventory.xlsx',
+    cacheDurationMinutes: 20,
+    mainGroupId: -1001234567890,
+    newGroupId: -1001987654321,
+    adminGroupIds: [-1001987654321],
+    secondaryGroupIds: [-1001122334455],
+    workingHours: { start: '08:00', end: '17:30' },
+    thursdayHours: { start: '08:00', end: '13:30' },
+    disableFriday: true,
+    lunchBreak: { start: '14:00', end: '14:30' },
+    queryLimit: 50,
+    deliveryInfo: {
+      before15: 'تحویل کالا پیش از ساعت ۱۵ از دفتر بازار انجام می‌شود.',
+      after15: 'پس از ساعت ۱۵ تحویل با هماهنگی پیک انجام خواهد شد.',
+    },
+    changeoverHour: '15:00',
+    blacklist: [437739989],
+    dataSourceOrigin: 'mock',
+  },
 };
 
 const delay = (ms = 360) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -541,5 +567,109 @@ export const api = {
       emitFallback({ method: 'getAuditLog', reason: 'usingFallback' });
     }
     return result;
+  },
+
+  async getPrivateTelegramSettings() {
+    return runWithFallback(
+      'getPrivateTelegramSettings',
+      () => request('/api/v1/private-telegram/settings'),
+      () => mockStore.privateTelegram
+    );
+  },
+
+  async updatePrivateTelegramSettings(payload) {
+    const mockHandler = () => {
+      const current = mockStore.privateTelegram;
+      const next = {
+        ...current,
+        ...payload,
+      };
+      if (Object.prototype.hasOwnProperty.call(payload, 'workingHours')) {
+        next.workingHours = {
+          start: payload.workingHours.start ?? '',
+          end: payload.workingHours.end ?? '',
+        };
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'thursdayHours')) {
+        next.thursdayHours = {
+          start: payload.thursdayHours.start ?? '',
+          end: payload.thursdayHours.end ?? '',
+        };
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'lunchBreak')) {
+        next.lunchBreak = {
+          start: payload.lunchBreak.start ?? '',
+          end: payload.lunchBreak.end ?? '',
+        };
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'deliveryInfo')) {
+        next.deliveryInfo = {
+          before15: payload.deliveryInfo.before15 ?? '',
+          after15: payload.deliveryInfo.after15 ?? '',
+        };
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'adminGroupIds')) {
+        next.adminGroupIds = [...(payload.adminGroupIds ?? [])];
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'secondaryGroupIds')) {
+        next.secondaryGroupIds = [...(payload.secondaryGroupIds ?? [])];
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'blacklist')) {
+        next.blacklist = [...(payload.blacklist ?? [])];
+      }
+      const touched = [];
+      if (Object.prototype.hasOwnProperty.call(payload, 'enabled')) touched.push('وضعیت');
+      if (Object.prototype.hasOwnProperty.call(payload, 'dmEnabled')) touched.push('پیام خصوصی');
+      if (
+        Object.prototype.hasOwnProperty.call(payload, 'apiId') ||
+        Object.prototype.hasOwnProperty.call(payload, 'apiHash') ||
+        Object.prototype.hasOwnProperty.call(payload, 'phoneNumber')
+      ) {
+        touched.push('احراز هویت');
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(payload, 'dataSource') ||
+        Object.prototype.hasOwnProperty.call(payload, 'excelFile')
+      ) {
+        touched.push('منبع داده');
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'cacheDurationMinutes'))
+        touched.push('کش');
+      if (
+        Object.prototype.hasOwnProperty.call(payload, 'mainGroupId') ||
+        Object.prototype.hasOwnProperty.call(payload, 'newGroupId') ||
+        Object.prototype.hasOwnProperty.call(payload, 'adminGroupIds')
+      )
+        touched.push('گروه‌ها');
+      if (
+        Object.prototype.hasOwnProperty.call(payload, 'workingHours') ||
+        Object.prototype.hasOwnProperty.call(payload, 'thursdayHours') ||
+        Object.prototype.hasOwnProperty.call(payload, 'disableFriday')
+      )
+        touched.push('ساعات کاری');
+      if (Object.prototype.hasOwnProperty.call(payload, 'lunchBreak')) touched.push('ناهار');
+      if (Object.prototype.hasOwnProperty.call(payload, 'queryLimit')) touched.push('محدودیت');
+      if (
+        Object.prototype.hasOwnProperty.call(payload, 'deliveryInfo') ||
+        Object.prototype.hasOwnProperty.call(payload, 'changeoverHour')
+      ) {
+        touched.push('پیام تحویل');
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'blacklist')) {
+        touched.push('لیست سیاه خصوصی');
+      }
+      mockStore.privateTelegram = next;
+      if (touched.length) {
+        const summary = [...new Set(touched)].join('، ');
+        pushMockAudit('به‌روزرسانی تنظیمات تلگرام خصوصی', summary);
+      }
+      return next;
+    };
+
+    return runWithFallback(
+      'updatePrivateTelegramSettings',
+      () => request('/api/v1/private-telegram/settings', { method: 'PUT', body: payload }),
+      mockHandler
+    );
   },
 };
