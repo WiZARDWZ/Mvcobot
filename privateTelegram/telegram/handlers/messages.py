@@ -5,6 +5,17 @@ from zoneinfo import ZoneInfo
 
 from telethon import events
 from telethon.tl.custom import Message
+
+
+def _ensure_private_package() -> None:
+    import sys
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parents[2].parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+
 try:
     from privateTelegram.telegram.client import (
         client,
@@ -13,7 +24,8 @@ try:
         ADMIN_GROUP_IDS,
     )
 except ModuleNotFoundError:  # Legacy script-style execution
-    from telegram.client import (
+    _ensure_private_package()
+    from privateTelegram.telegram.client import (
         client,
         MAIN_GROUP_ID,
         NEW_GROUP_ID,
@@ -23,7 +35,8 @@ except ModuleNotFoundError:  # Legacy script-style execution
 try:
     from privateTelegram.config.settings import settings
 except ModuleNotFoundError:
-    from config.settings import settings
+    _ensure_private_package()
+    from privateTelegram.config.settings import settings
 
 try:
     from privateTelegram.utils.time_checks import is_within_active_hours
@@ -34,9 +47,10 @@ try:
         escape_markdown,
     )
 except ModuleNotFoundError:
-    from utils.time_checks import is_within_active_hours
-    import utils.state as bot_state
-    from utils.formatting import (
+    _ensure_private_package()
+    from privateTelegram.utils.time_checks import is_within_active_hours
+    from privateTelegram.utils import state as bot_state
+    from privateTelegram.utils.formatting import (
         normalize_code,
         fix_part_number_display,
         escape_markdown,
@@ -48,7 +62,11 @@ try:
         find_partial_matches,
     )
 except ModuleNotFoundError:
-    from processor.finder import find_similar_products, find_partial_matches
+    _ensure_private_package()
+    from privateTelegram.processor.finder import (
+        find_similar_products,
+        find_partial_matches,
+    )
 
 TZ = ZoneInfo("Asia/Tehran")
 

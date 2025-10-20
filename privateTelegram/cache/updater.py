@@ -1,14 +1,35 @@
 import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from config.settings import settings
-import utils.state as state
-from processor.transformer import process_data
+
+
+def _ensure_private_package() -> None:
+    import sys
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parents[1].parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+
+try:
+    from privateTelegram.config.settings import settings
+    from privateTelegram.utils import state
+    from privateTelegram.processor.transformer import process_data
+except ModuleNotFoundError:
+    _ensure_private_package()
+    from privateTelegram.config.settings import settings
+    from privateTelegram.utils import state
+    from privateTelegram.processor.transformer import process_data
 
 # SQL Server connector
-from db.sql_server import get_sql_data
-# Excel connector
-from db.excel_connector import get_excel_data
+try:
+    from privateTelegram.db.sql_server import get_sql_data
+    from privateTelegram.db.excel_connector import get_excel_data
+except ModuleNotFoundError:
+    _ensure_private_package()
+    from privateTelegram.db.sql_server import get_sql_data
+    from privateTelegram.db.excel_connector import get_excel_data
 
 TZ = ZoneInfo("Asia/Tehran")
 
