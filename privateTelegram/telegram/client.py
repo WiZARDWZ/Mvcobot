@@ -4,7 +4,7 @@ from typing import Iterable, List
 
 from telethon import TelegramClient
 
-from config.settings import settings
+from privateTelegram.config.settings import settings
 
 # ایجاد کلاینت تلگرام
 client = TelegramClient(

@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from config.settings import settings
+from privateTelegram.config.settings import settings
 from utils.state import sent_messages
 from telegram.client import get_new_group_id
 

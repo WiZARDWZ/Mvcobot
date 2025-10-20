@@ -14,7 +14,7 @@ from telegram.client import (
     get_secondary_group_ids,
 )
 
-from config.settings import settings
+from privateTelegram.config.settings import settings
 from utils.time_checks import is_within_active_hours
 import utils.state as state
 from utils.formatting import (

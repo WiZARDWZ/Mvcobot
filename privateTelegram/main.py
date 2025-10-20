@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 from telegram.client import client
-from config.settings import settings
+from privateTelegram.config.settings import settings
 from cache.updater import update_cache_periodically
 
 # Register handlers so decorators take effect

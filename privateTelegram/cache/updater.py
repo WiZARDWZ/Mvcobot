@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from config.settings import settings
+from privateTelegram.config.settings import settings
 import utils.state as state
 from processor.transformer import process_data
 

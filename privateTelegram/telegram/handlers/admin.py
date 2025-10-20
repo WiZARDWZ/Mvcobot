@@ -12,7 +12,7 @@ from telegram.client import (
     get_main_group_id,
     get_new_group_id,
 )
-from config.settings import settings, save_settings
+from privateTelegram.config.settings import settings, save_settings
 import utils.state as state
 
 TZ = ZoneInfo("Asia/Tehran")
