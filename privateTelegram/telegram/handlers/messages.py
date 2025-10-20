@@ -5,17 +5,50 @@ from zoneinfo import ZoneInfo
 
 from telethon import events
 from telethon.tl.custom import Message
-from telegram.client import client, MAIN_GROUP_ID, NEW_GROUP_ID, ADMIN_GROUP_IDS
+try:  # Prefer absolute imports when executed as a package
+    from privateTelegram.telegram.client import (
+        client,
+        MAIN_GROUP_ID,
+        NEW_GROUP_ID,
+        ADMIN_GROUP_IDS,
+    )
+except ModuleNotFoundError:  # Fallback for standalone execution
+    from telegram.client import (
+        client,
+        MAIN_GROUP_ID,
+        NEW_GROUP_ID,
+        ADMIN_GROUP_IDS,
+    )
 
-from config.settings import settings
-from utils.time_checks import is_within_active_hours
-import utils.state as state
-from utils.formatting import (
-    normalize_code,
-    fix_part_number_display,
-    escape_markdown,
-)
-from processor.finder import find_similar_products, find_partial_matches
+try:
+    from privateTelegram.config.settings import settings
+except ModuleNotFoundError:
+    from config.settings import settings
+
+try:
+    from privateTelegram.utils.time_checks import is_within_active_hours
+    import privateTelegram.utils.state as state
+    from privateTelegram.utils.formatting import (
+        normalize_code,
+        fix_part_number_display,
+        escape_markdown,
+    )
+except ModuleNotFoundError:
+    from utils.time_checks import is_within_active_hours
+    import utils.state as state
+    from utils.formatting import (
+        normalize_code,
+        fix_part_number_display,
+        escape_markdown,
+    )
+
+try:
+    from privateTelegram.processor.finder import (
+        find_similar_products,
+        find_partial_matches,
+    )
+except ModuleNotFoundError:
+    from processor.finder import find_similar_products, find_partial_matches
 
 TZ = ZoneInfo("Asia/Tehran")
 

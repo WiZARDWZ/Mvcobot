@@ -1,12 +1,18 @@
 import asyncio
 import logging
 
-from telegram.client import client
-from config.settings import settings
-from cache.updater import update_cache_periodically
+try:
+    from .telegram.client import client
+    from .config.settings import settings
+    from .cache.updater import update_cache_periodically
+    from .telegram.handlers import messages, admin  # noqa: F401  (register handlers)
+except ModuleNotFoundError:
+    from telegram.client import client
+    from config.settings import settings
+    from cache.updater import update_cache_periodically
 
-# Register handlers so decorators take effect
-from telegram.handlers import messages, admin
+    # Register handlers so decorators take effect when run as a script
+    from telegram.handlers import messages, admin  # noqa: F401
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
