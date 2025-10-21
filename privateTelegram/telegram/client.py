@@ -1,9 +1,26 @@
 from telethon import TelegramClient
-from config.settings import settings
+
+def _ensure_private_package() -> None:
+    import sys
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parents[1].parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+
+try:
+    from privateTelegram.config.settings import APP_DIR, settings
+except ModuleNotFoundError:
+    _ensure_private_package()
+    from privateTelegram.config.settings import APP_DIR, settings
+
+
+SESSION_BASENAME = APP_DIR / "session"
 
 # ایجاد کلاینت تلگرام
 client = TelegramClient(
-    "session",
+    str(SESSION_BASENAME),
     settings["api_id"],
     settings["api_hash"]
 )
