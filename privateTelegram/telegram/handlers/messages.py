@@ -5,17 +5,68 @@ from zoneinfo import ZoneInfo
 
 from telethon import events
 from telethon.tl.custom import Message
-from telegram.client import client, MAIN_GROUP_ID, NEW_GROUP_ID, ADMIN_GROUP_IDS
 
-from config.settings import settings
-from utils.time_checks import is_within_active_hours
-import utils.state as state
-from utils.formatting import (
-    normalize_code,
-    fix_part_number_display,
-    escape_markdown,
-)
-from processor.finder import find_similar_products, find_partial_matches
+
+def _ensure_private_package() -> None:
+    import sys
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parents[2].parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+
+try:
+    from privateTelegram.telegram.client import (
+        client,
+        MAIN_GROUP_ID,
+        NEW_GROUP_ID,
+        ADMIN_GROUP_IDS,
+    )
+except ModuleNotFoundError:  # Legacy script-style execution
+    _ensure_private_package()
+    from privateTelegram.telegram.client import (
+        client,
+        MAIN_GROUP_ID,
+        NEW_GROUP_ID,
+        ADMIN_GROUP_IDS,
+    )
+
+try:
+    from privateTelegram.config.settings import settings
+except ModuleNotFoundError:
+    _ensure_private_package()
+    from privateTelegram.config.settings import settings
+
+try:
+    from privateTelegram.utils.time_checks import is_within_active_hours
+    from privateTelegram.utils import state as bot_state
+    from privateTelegram.utils.formatting import (
+        normalize_code,
+        fix_part_number_display,
+        escape_markdown,
+    )
+except ModuleNotFoundError:
+    _ensure_private_package()
+    from privateTelegram.utils.time_checks import is_within_active_hours
+    from privateTelegram.utils import state as bot_state
+    from privateTelegram.utils.formatting import (
+        normalize_code,
+        fix_part_number_display,
+        escape_markdown,
+    )
+
+try:
+    from privateTelegram.processor.finder import (
+        find_similar_products,
+        find_partial_matches,
+    )
+except ModuleNotFoundError:
+    _ensure_private_package()
+    from privateTelegram.processor.finder import (
+        find_similar_products,
+        find_partial_matches,
+    )
 
 TZ = ZoneInfo("Asia/Tehran")
 
@@ -51,7 +102,7 @@ async def handle_new_message(event):
         return
 
     # 3) Per-user counter
-    counts = state.user_query_counts.setdefault(
+    counts = bot_state.user_query_counts.setdefault(
         user_id, {"count": 0, "start": now_dt}
     )
 
@@ -108,7 +159,7 @@ async def handle_new_message(event):
 
         # 8a) Partial code
         if PARTIAL_PATTERN.match(token):
-            state.total_queries += 1
+            bot_state.total_queries += 1
             suggestions = find_partial_matches(norm)
             if not suggestions:
                 continue
@@ -124,21 +175,21 @@ async def handle_new_message(event):
             if prods:
                 if user_id not in ADMIN_GROUP_IDS:
                     counts["count"] += 1
-                state.sent_messages[f"{user_id}:{norm_full}"] = now_dt
+                bot_state.sent_messages[f"{user_id}:{norm_full}"] = now_dt
                 for p in prods:
                     _send_product(user_id, p, now_dt)
 
         # 8b) Full code
         elif FULL_PATTERN.match(token):
-            state.total_queries += 1
+            bot_state.total_queries += 1
             key = f"{user_id}:{norm}"
             if chat_id == MAIN_GROUP_ID and user_id not in ADMIN_GROUP_IDS:
-                last = state.sent_messages.get(key)
+                last = bot_state.sent_messages.get(key)
                 if last and now_dt - last < timedelta(minutes=30):
                     continue
             if user_id not in ADMIN_GROUP_IDS:
                 counts["count"] += 1
-            state.sent_messages[key] = now_dt
+            bot_state.sent_messages[key] = now_dt
             prods = find_similar_products(norm)
             if prods:
                 for p in prods:
@@ -169,7 +220,7 @@ async def handle_private_message(event):
         return
 
     # Per-user counter (24h window)
-    counts = state.user_query_counts.setdefault(
+    counts = bot_state.user_query_counts.setdefault(
         user_id, {"count": 0, "start": now_dt}
     )
     if not is_within_active_hours() and user_id not in ADMIN_GROUP_IDS:
@@ -221,7 +272,7 @@ async def handle_private_message(event):
 
         # Partial code in PM
         if PARTIAL_PATTERN.match(token):
-            state.total_queries += 1
+            bot_state.total_queries += 1
             suggestions = find_partial_matches(norm)
             if not suggestions:
                 continue
@@ -238,22 +289,22 @@ async def handle_private_message(event):
             if prods:
                 if user_id not in ADMIN_GROUP_IDS:
                     counts["count"] += 1
-                state.sent_messages[f"{user_id}:{norm_full}"] = now_dt
+                bot_state.sent_messages[f"{user_id}:{norm_full}"] = now_dt
                 for p in prods:
                     _send_product(user_id, p, now_dt)
 
         # Full code in PM
         elif FULL_PATTERN.match(token):
-            state.total_queries += 1
+            bot_state.total_queries += 1
             key = f"{user_id}:{norm}"
             if user_id not in ADMIN_GROUP_IDS:
-                last = state.sent_messages.get(key)
+                last = bot_state.sent_messages.get(key)
                 if last and now_dt - last < timedelta(minutes=30):
                     # جلوگیری از ارسال تکراری ظرف ۳۰ دقیقه
                     continue
                 counts["count"] += 1
 
-            state.sent_messages[key] = now_dt
+            bot_state.sent_messages[key] = now_dt
             prods = find_similar_products(norm)
             if prods:
                 for p in prods:

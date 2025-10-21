@@ -1,8 +1,25 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from config.settings import settings
-from utils.state import sent_messages
-from telegram.client import NEW_GROUP_ID
+
+
+def _ensure_private_package() -> None:
+    import sys
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parents[1].parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+
+try:
+    from privateTelegram.config.settings import settings
+    from privateTelegram.utils.state import sent_messages
+    from privateTelegram.telegram.client import NEW_GROUP_ID
+except ModuleNotFoundError:
+    _ensure_private_package()
+    from privateTelegram.config.settings import settings
+    from privateTelegram.utils.state import sent_messages
+    from privateTelegram.telegram.client import NEW_GROUP_ID
 
 TZ = ZoneInfo("Asia/Tehran")
 
