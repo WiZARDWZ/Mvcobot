@@ -8,11 +8,11 @@ def _ensure_private_package() -> None:
 
 
 try:
-    from privateTelegram.cache.updater import get_cached_data
+    from privateTelegram.cache.store import get_cached_data
     from privateTelegram.utils.formatting import normalize_code
 except ModuleNotFoundError:
     _ensure_private_package()
-    from privateTelegram.cache.updater import get_cached_data
+    from privateTelegram.cache.store import get_cached_data
     from privateTelegram.utils.formatting import normalize_code
 
 ORIGINAL_BRANDS = ["MOBIS", "GENUINE"]
