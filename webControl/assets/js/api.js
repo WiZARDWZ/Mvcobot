@@ -567,15 +567,34 @@ export const api = {
     );
   },
 
-  async getAuditLog() {
+  async getAuditLog({ page = 1, pageSize = 20 } = {}) {
+    const parsedPage = Number(page);
+    const parsedSize = Number(pageSize);
+    const safePage = Number.isFinite(parsedPage) && parsedPage > 0 ? Math.floor(parsedPage) : 1;
+    const safeSize = Number.isFinite(parsedSize) && parsedSize > 0 ? Math.floor(parsedSize) : 20;
+    const params = new URLSearchParams({
+      page: String(safePage),
+      pageSize: String(safeSize),
+    });
+
     const result = await runWithFallback(
       'getAuditLog',
-      () => request('/api/v1/audit-log'),
-      () => ({
-        items: mockStore.auditLog,
-        total: mockStore.auditLog.length,
-        dataSource: 'fallback',
-      })
+      () => request(`/api/v1/audit-log?${params.toString()}`),
+      () => {
+        const total = mockStore.auditLog.length;
+        const totalPages = Math.max(1, Math.ceil(total / safeSize));
+        const currentPage = Math.min(safePage, totalPages);
+        const start = (currentPage - 1) * safeSize;
+        const items = mockStore.auditLog.slice(start, start + safeSize);
+        return {
+          items,
+          total,
+          page: currentPage,
+          pageSize: safeSize,
+          pages: totalPages,
+          dataSource: 'fallback',
+        };
+      }
     );
     if (isMockMode() || result?.dataSource === 'fallback') {
       emitFallback({ method: 'getAuditLog', reason: 'usingFallback' });

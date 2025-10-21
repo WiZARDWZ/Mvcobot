@@ -14,6 +14,7 @@ from database.connector_bot import (
     fetch_audit_log_entries,
     fetch_working_hours_entries,
     get_blacklist,
+    get_blacklist_with_meta,
     get_connection,
     get_setting,
     record_audit_event,
@@ -92,6 +93,7 @@ DELIVERY_BEFORE_KEY = "delivery_before"
 DELIVERY_AFTER_KEY = "delivery_after"
 CHANGEOVER_KEY = "changeover_hour"
 AUDIT_LOG_KEY = "panel_audit_log_v1"
+BLOCKLIST_META_KEY = "panel_blocklist_meta_v1"
 
 WORKING_DAY_ORDER = [5, 6, 0, 1, 2, 3, 4]  # Saturday → Friday (Python weekday numbering)
 
@@ -178,6 +180,46 @@ def _save_json_setting(key: str, value: Any) -> None:
     except Exception:
         LOGGER.exception("Failed to persist JSON setting %s", key)
         raise ControlPanelError("ذخیره‌سازی تنظیمات امکان‌پذیر نبود. دوباره تلاش کنید.", status=500)
+
+
+def _load_blocklist_meta() -> Dict[str, str]:
+    data = _load_json_setting(BLOCKLIST_META_KEY, {})
+    if isinstance(data, dict):
+        result: Dict[str, str] = {}
+        for key, value in data.items():
+            key_text = str(key).strip()
+            value_text = str(value).strip()
+            if key_text and value_text:
+                result[key_text] = value_text
+        return result
+    return {}
+
+
+def _save_blocklist_meta(meta: Dict[str, str]) -> None:
+    try:
+        set_setting(BLOCKLIST_META_KEY, json.dumps(meta, ensure_ascii=False))
+    except Exception:
+        LOGGER.warning("Failed to persist blocklist metadata", exc_info=True)
+
+
+def _remember_blocklist_timestamp(user_id: int, timestamp: str) -> None:
+    key = str(user_id)
+    if not timestamp:
+        return
+    meta = _load_blocklist_meta()
+    if meta.get(key) == timestamp:
+        return
+    meta[key] = timestamp
+    _save_blocklist_meta(meta)
+
+
+def _forget_blocklist_timestamp(user_id: int) -> None:
+    key = str(user_id)
+    meta = _load_blocklist_meta()
+    if key not in meta:
+        return
+    meta.pop(key, None)
+    _save_blocklist_meta(meta)
 
 
 def _load_audit_log_fallback() -> List[Dict[str, Any]]:
@@ -827,22 +869,59 @@ def delete_command(command_id: str) -> Dict[str, Any]:
 
 
 def get_blocklist() -> List[Dict[str, Any]]:
-    entries = []
+    entries: List[Dict[str, Any]] = []
     try:
-        for user_id in get_blacklist():
-            entries.append(
-                {
-                    "id": str(user_id),
-                    "userId": int(user_id),
-                    "platform": "telegram",
-                    "phoneOrUser": str(user_id),
-                    "reason": None,
-                    "createdAtISO": None,
-                }
-            )
+        records = get_blacklist_with_meta()
+        if not records:
+            # Fall back to legacy behaviour
+            records = [
+                {"user_id": user_id, "created_at": None}
+                for user_id in get_blacklist()
+            ]
     except Exception as exc:
-        LOGGER.warning("Failed to fetch blocklist: %s", exc)
+        LOGGER.warning("Failed to fetch blocklist metadata: %s", exc)
         raise ControlPanelError("دریافت لیست مسدود امکان‌پذیر نبود.", status=500)
+
+    meta = _load_blocklist_meta()
+    changed = False
+    seen_keys = set()
+
+    for record in records:
+        user_id = record.get("user_id")
+        if user_id is None:
+            continue
+        created_iso = record.get("created_at")
+        key = str(user_id)
+        if created_iso in ("", None):
+            created_iso = meta.get(key)
+        else:
+            if meta.get(key) != created_iso:
+                meta[key] = created_iso
+                changed = True
+        if created_iso in ("", None):
+            created_iso = None
+        entries.append(
+            {
+                "id": str(user_id),
+                "userId": int(user_id),
+                "platform": "telegram",
+                "phoneOrUser": str(user_id),
+                "reason": None,
+                "createdAtISO": created_iso,
+            }
+        )
+        seen_keys.add(key)
+
+    # Clean up stale metadata for users no longer present
+    stale = set(meta.keys()) - seen_keys
+    if stale:
+        for key in stale:
+            meta.pop(key, None)
+        changed = True
+
+    if changed:
+        _save_blocklist_meta(meta)
+
     return entries
 
 
@@ -860,6 +939,20 @@ def add_block_item(payload: Dict[str, Any]) -> Dict[str, Any]:
         LOGGER.warning("Failed to add user %s to blacklist: %s", user_id, exc)
         raise ControlPanelError("افزودن به لیست مسدود با خطا مواجه شد.", status=500)
 
+    created_iso = None
+    try:
+        for record in get_blacklist_with_meta():
+            if record.get("user_id") == user_id:
+                created_iso = record.get("created_at")
+                break
+    except Exception:
+        created_iso = None
+
+    if not created_iso:
+        created_iso = _now_iso()
+
+    _remember_blocklist_timestamp(user_id, created_iso)
+
     _append_audit_event("افزودن به لیست مسدود", details=f"کاربر {user_id}")
     return {
         "id": str(user_id),
@@ -867,7 +960,7 @@ def add_block_item(payload: Dict[str, Any]) -> Dict[str, Any]:
         "platform": "telegram",
         "phoneOrUser": str(user_id),
         "reason": None,
-        "createdAtISO": _now_iso(),
+        "createdAtISO": created_iso,
     }
 
 
@@ -881,6 +974,7 @@ def remove_block_item(item_id: str) -> Dict[str, Any]:
     except Exception as exc:
         LOGGER.warning("Failed to remove user %s from blacklist: %s", user_id, exc)
         raise ControlPanelError("حذف از لیست مسدود امکان‌پذیر نبود.", status=500)
+    _forget_blocklist_timestamp(user_id)
     _append_audit_event("حذف از لیست مسدود", details=f"کاربر {user_id}")
     return {"success": True}
 
@@ -902,15 +996,35 @@ def get_settings() -> Dict[str, Any]:
     }
 
 
-def get_audit_log(limit: int = 50) -> Dict[str, Any]:
-    live_limit = limit if isinstance(limit, int) and limit > 0 else MAX_AUDIT_LOG_ENTRIES
+def get_audit_log(*, page: int = 1, page_size: int = 20) -> Dict[str, Any]:
     try:
-        entries, total = fetch_audit_log_entries(live_limit)
-        if limit > 0 and len(entries) > limit:
-            entries = entries[:limit]
+        page_int = int(page)
+    except Exception:
+        page_int = 1
+    if page_int <= 0:
+        page_int = 1
+
+    try:
+        size_int = int(page_size)
+    except Exception:
+        size_int = 50
+    size_int = max(1, min(size_int, 200))
+
+    offset = (page_int - 1) * size_int
+
+    try:
+        entries, total = fetch_audit_log_entries(limit=size_int, offset=offset)
+        total_pages = max(1, (total + size_int - 1) // size_int) if total else 1
+        if page_int > total_pages:
+            page_int = total_pages
+            offset = (page_int - 1) * size_int
+            entries, total = fetch_audit_log_entries(limit=size_int, offset=offset)
         return {
             "items": entries,
             "total": total,
+            "page": page_int,
+            "pageSize": size_int,
+            "pages": max(1, (total + size_int - 1) // size_int) if total else 1,
             "dataSource": "live",
         }
     except Exception:
@@ -918,11 +1032,18 @@ def get_audit_log(limit: int = 50) -> Dict[str, Any]:
 
     entries = _load_audit_log_fallback()
     total = len(entries)
-    if limit > 0:
-        entries = entries[:limit]
+    total_pages = max(1, (total + size_int - 1) // size_int)
+    if page_int > total_pages:
+        page_int = total_pages
+    start = max(0, (page_int - 1) * size_int)
+    end = start + size_int
+    sliced = entries[start:end]
     return {
-        "items": entries,
+        "items": sliced,
         "total": total,
+        "page": page_int,
+        "pageSize": size_int,
+        "pages": total_pages,
         "dataSource": "fallback",
     }
 

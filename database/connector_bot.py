@@ -1,5 +1,5 @@
 import json
-from datetime import time
+from datetime import datetime, time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pyodbc
@@ -273,12 +273,13 @@ def record_audit_event(message: str, *, actor: str = "کنترل‌پنل", deta
         conn.commit()
 
 
-def fetch_audit_log_entries(limit: int = 200) -> Tuple[List[dict], int]:
+def fetch_audit_log_entries(limit: int = 200, offset: int = 0) -> Tuple[List[dict], int]:
     if not ensure_control_panel_tables():
         raise RuntimeError("control panel tables are unavailable")
-    limit = max(1, min(limit, 500))
-    query = f"""
-        SELECT TOP {limit}
+    limit = max(1, min(int(limit or 0), 500))
+    offset = max(0, int(offset or 0))
+    base_query = """
+        SELECT
             id,
             [timestamp],
             actor,
@@ -287,11 +288,32 @@ def fetch_audit_log_entries(limit: int = 200) -> Tuple[List[dict], int]:
         FROM control_panel_audit_log
         ORDER BY [timestamp] DESC, id DESC
     """
+    paginated_query = base_query + " OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
     count_query = "SELECT COUNT(*) FROM control_panel_audit_log"
     entries: List[dict] = []
     with get_connection() as conn:
         cur = conn.cursor()
-        rows = cur.execute(query).fetchall()
+        try:
+            rows = cur.execute(paginated_query, offset, limit).fetchall()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            fetch_size = limit + offset
+            fallback_query = f"""
+                SELECT TOP {fetch_size}
+                    id,
+                    [timestamp],
+                    actor,
+                    message,
+                    details
+                FROM control_panel_audit_log
+                ORDER BY [timestamp] DESC, id DESC
+            """
+            rows = cur.execute(fallback_query).fetchall()
+            if offset:
+                rows = rows[offset:]
         total_row = cur.execute(count_query).fetchone()
     total = int(total_row[0]) if total_row else 0
     for row in rows:
@@ -354,11 +376,27 @@ def add_to_blacklist(user_id):
         uid = int(user_id)
     except:
         return
-    query = "IF NOT EXISTS (SELECT 1 FROM blacklist WHERE user_id=?) INSERT INTO blacklist(user_id) VALUES(?)"
+
+    insert_with_timestamp = (
+        "IF NOT EXISTS (SELECT 1 FROM blacklist WHERE user_id=?) "
+        "INSERT INTO blacklist(user_id, created_at) VALUES(?, GETDATE())"
+    )
+    insert_without_timestamp = (
+        "IF NOT EXISTS (SELECT 1 FROM blacklist WHERE user_id=?) "
+        "INSERT INTO blacklist(user_id) VALUES(?)"
+    )
+
     try:
         with get_connection() as conn:
             cur = conn.cursor()
-            cur.execute(query, uid, uid)
+            try:
+                cur.execute(insert_with_timestamp, uid, uid)
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                cur.execute(insert_without_timestamp, uid, uid)
             conn.commit()
     except Exception as e:
         print("❌ خطا در add_to_blacklist:", e)
@@ -391,16 +429,69 @@ def is_blacklisted(user_id) -> bool:
         print("❌ خطا در is_blacklisted:", e)
         return False
 
-def get_blacklist() -> List[int]:
-    query = "SELECT user_id FROM blacklist"
+def _coerce_iso(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        try:
+            return value.isoformat()
+        except Exception:
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+        return parsed.isoformat()
+    except Exception:
+        return text
+
+
+def get_blacklist_with_meta() -> List[Dict[str, Any]]:
+    query_with_created = (
+        "SELECT user_id, created_at FROM blacklist "
+        "ORDER BY created_at DESC, user_id DESC"
+    )
+    query_without_created = "SELECT user_id FROM blacklist ORDER BY user_id DESC"
+
     try:
         with get_connection() as conn:
             cur = conn.cursor()
-            rows = cur.execute(query).fetchall()
-            return [int(r[0]) for r in rows]
+            try:
+                rows = cur.execute(query_with_created).fetchall()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                rows = cur.execute(query_without_created).fetchall()
+                return [
+                    {"user_id": int(row[0]), "created_at": None}
+                    for row in rows
+                ]
+
+            result: List[Dict[str, Any]] = []
+            for row in rows:
+                user_value = row[0]
+                created_value = row[1] if len(row) > 1 else None
+                try:
+                    user_id = int(user_value)
+                except Exception:
+                    continue
+                result.append(
+                    {
+                        "user_id": user_id,
+                        "created_at": _coerce_iso(created_value),
+                    }
+                )
+            return result
     except Exception as e:
-        print("❌ خطا در get_blacklist:", e)
+        print("❌ خطا در get_blacklist_with_meta:", e)
         return []
+
+
+def get_blacklist() -> List[int]:
+    return [entry["user_id"] for entry in get_blacklist_with_meta()]
 
 def fetch_logs(user_id: int) -> List[dict]:
     """
