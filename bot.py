@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 import asyncio
+from contextlib import suppress
 import logging
 import re
 import os
 import sys
 import time
+import threading
 from datetime import datetime
 
 from telegram.ext import (
@@ -396,6 +398,57 @@ def main():
         print(f"[WebControl] Control panel serving on port {port}")
     else:
         print("[WebControl] Control panel server failed to start.")
+
+    # --- Start the legacy private Telegram bot alongside MVCO bot
+    def _shutdown_private_loop(loop: asyncio.AbstractEventLoop) -> None:
+        if loop.is_closed():
+            return
+
+        pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            with suppress(Exception):
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        with suppress(Exception):
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
+        try:
+            asyncio.set_event_loop(None)
+        except Exception:
+            pass
+
+    def _run_private_bot():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            from privateTelegram import main as private_main
+            from privateTelegram.telegram.client import client as private_client
+        except Exception as exc:
+            logging.error("Failed to import privateTelegram bot: %s", exc, exc_info=True)
+            _shutdown_private_loop(loop)
+            return
+
+        try:
+            client_loop = getattr(private_client, "loop", loop)
+            if client_loop is not loop:
+                loop.close()
+                loop = client_loop
+                asyncio.set_event_loop(loop)
+
+            loop.run_until_complete(private_main.main())
+        except Exception as exc:
+            logging.error("privateTelegram bot exited with error: %s", exc, exc_info=True)
+        finally:
+            _shutdown_private_loop(loop)
+
+    private_bot_thread = threading.Thread(
+        target=_run_private_bot,
+        name="private-telegram-bot",
+        daemon=True,
+    )
+    private_bot_thread.start()
+    logging.info("privateTelegram bot thread started (daemon mode).")
 
     app = _build_application()
     try:

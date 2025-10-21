@@ -1,7 +1,13 @@
-# handlers/wa_control.py
+"""Legacy WhatsApp control handlers kept for backward compatibility."""
+
+from typing import TYPE_CHECKING
+
 from telegram import Update
-from telegram.ext import ContextTypes, CommandHandler, Application
+from telegram.ext import ContextTypes, CommandHandler
 from wa.manager import wa_controller
+
+if TYPE_CHECKING:  # pragma: no cover
+    from telegram.ext import Application
 try:
     from admin import is_authorized
 except Exception:
@@ -125,7 +131,7 @@ async def set_changeover_hour(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         await update.message.reply_text(f"❌ مقدار نامعتبر: {e}")
 
-def register_wa_handlers(app: Application):
+def register_wa_handlers(app: "Application"):
     # استارت واتساپ در شروع ربات تلگرام
     async def _start_wa_job(_):
         await wa_controller.start()
