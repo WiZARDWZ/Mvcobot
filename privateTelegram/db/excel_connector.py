@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pandas as pd
 
 
@@ -11,10 +13,10 @@ def _ensure_private_package() -> None:
 
 
 try:
-    from privateTelegram.config.settings import settings
+    from privateTelegram.config.settings import APP_DIR, settings
 except ModuleNotFoundError:
     _ensure_private_package()
-    from privateTelegram.config.settings import settings
+    from privateTelegram.config.settings import APP_DIR, settings
 
 def get_excel_data():
     """
@@ -27,7 +29,11 @@ def get_excel_data():
       - "برند"
       - "قیمت"      (will map to "فی فروش")
     """
-    path = settings.get("excel_file")
+    raw_path = settings.get("excel_file") or str(APP_DIR / "inventory.xlsx")
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = APP_DIR / path
+
     try:
         df = pd.read_excel(path)
     except Exception as e:

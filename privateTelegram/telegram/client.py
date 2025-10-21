@@ -10,14 +10,17 @@ def _ensure_private_package() -> None:
 
 
 try:
-    from privateTelegram.config.settings import settings
+    from privateTelegram.config.settings import APP_DIR, settings
 except ModuleNotFoundError:
     _ensure_private_package()
-    from privateTelegram.config.settings import settings
+    from privateTelegram.config.settings import APP_DIR, settings
+
+
+SESSION_BASENAME = APP_DIR / "session"
 
 # ایجاد کلاینت تلگرام
 client = TelegramClient(
-    "session",
+    str(SESSION_BASENAME),
     settings["api_id"],
     settings["api_hash"]
 )
