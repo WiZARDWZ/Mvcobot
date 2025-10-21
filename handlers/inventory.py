@@ -14,6 +14,8 @@ from telegram.helpers import escape_markdown
 from database.connector import fetch_all_inventory_data
 from database.connector_bot import fetch_working_hours_entries, get_setting, is_blacklisted
 from utils.platforms import is_platform_enabled
+from utils.code_standardization import standardize_code
+from utils.code_tracker import record_code_lookup
 
 # ================= Consts & Globals =================
 
@@ -511,16 +513,31 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
 
     for t in dedup_tokens:
         norm, is_full = t["norm"], t["is_full"]
+        code_std = standardize_code(t["display"])
 
         if is_full and len(norm) >= 10:
             products = _find_products(norm)
             if not products:
+                if code_std:
+                    record_code_lookup(
+                        "telegram",
+                        code_std,
+                        part_name=None,
+                        requested_at=now,
+                    )
                 await update.message.reply_text(
                     f"\u200F⚠️ \u202A`{_fmt_disp(norm)}`\u202C متأسفانه موجود نمی‌باشد.\u200F",
                     parse_mode="Markdown"
                 )
                 continue
 
+            if code_std:
+                record_code_lookup(
+                    "telegram",
+                    code_std,
+                    part_name=products[0].get("نام کالا") or products[0].get("name") or None,
+                    requested_at=now,
+                )
             for item in products:
                 text_md = _format_item_reply_md(item, delivery)
                 await update.message.reply_text(text_md, parse_mode="Markdown")
@@ -534,10 +551,24 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
 
             if candidates:
                 suggestion = sorted(candidates, key=lambda it: _normalize(it["شماره قطعه"]))[0]
+                if code_std:
+                    record_code_lookup(
+                        "telegram",
+                        code_std,
+                        part_name=suggestion.get("نام کالا") or suggestion.get("name") or None,
+                        requested_at=now,
+                    )
                 text_md = _format_item_reply_md(suggestion, delivery)
                 await update.message.reply_text(text_md, parse_mode="Markdown")
                 continue
 
+            if code_std:
+                record_code_lookup(
+                    "telegram",
+                    code_std,
+                    part_name=None,
+                    requested_at=now,
+                )
             await update.message.reply_text(
                 f"\u200F⚠️ \u202A`{_fmt_disp(norm)}`\u202C متأسفانه موجود نمی‌باشد.\u200F",
                 parse_mode="Markdown"
@@ -545,6 +576,13 @@ async def handle_inventory_input(update: Update, context: ContextTypes.DEFAULT_T
             continue
 
         # Fallback invalid/too short
+        if code_std:
+            record_code_lookup(
+                "telegram",
+                code_std,
+                part_name=None,
+                requested_at=now,
+            )
         await update.message.reply_text(
             f"\u200F⚠️ \u202A`{_fmt_disp(norm)}`\u202C متأسفانه موجود نمی‌باشد.\u200F",
             parse_mode="Markdown"

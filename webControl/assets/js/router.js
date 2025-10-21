@@ -12,6 +12,7 @@ const fallbackBanner = document.querySelector('[data-role="fallback-alert"]');
 
 const routes = {
   '#/dashboard': () => import('./ui/dashboard.js'),
+  '#/stats': () => import('./ui/stats.js'),
   '#/commands': () => import('./ui/commands.js'),
   '#/blocklist': () => import('./ui/blocklist.js'),
   '#/private-telegram': () => import('./ui/private-telegram.js'),

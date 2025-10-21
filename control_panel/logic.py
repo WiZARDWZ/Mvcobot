@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from database.connector_bot import (
     add_to_blacklist,
     fetch_audit_log_entries,
+    fetch_code_statistics,
     fetch_working_hours_entries,
     get_blacklist,
     get_blacklist_with_meta,
@@ -792,6 +793,53 @@ def get_metrics() -> Dict[str, Any]:
         "monthly": metrics.monthly,
         "cache": metrics.cache,
         "status": metrics.status,
+    }
+
+
+def get_code_statistics(
+    *,
+    range_key: str,
+    sort_order: str,
+    page: int,
+    page_size: int,
+) -> Dict[str, Any]:
+    try:
+        items, total = fetch_code_statistics(
+            range_key=range_key,
+            sort_order=sort_order,
+            page=page,
+            page_size=page_size,
+        )
+    except Exception as exc:
+        LOGGER.warning("Failed to fetch code statistics: %s", exc)
+        raise ControlPanelError("دریافت آمار کدها امکان‌پذیر نبود.", status=500)
+
+    safe_page_size = max(1, min(int(page_size or 1), 100))
+    safe_total = max(0, int(total))
+    normalized_items: List[Dict[str, Any]] = []
+    for item in items:
+        code_value = str(item.get("code", "")).strip()
+        part_name = str(item.get("part_name", "-")).strip() or "-"
+        request_count = int(item.get("request_count", 0) or 0)
+        normalized_items.append(
+            {
+                "code": code_value,
+                "partName": part_name,
+                "requestCount": request_count,
+            }
+        )
+
+    total_pages = max(1, (safe_total + safe_page_size - 1) // safe_page_size)
+    current_page = max(1, min(int(page or 1), total_pages))
+
+    return {
+        "items": normalized_items,
+        "page": current_page,
+        "pageSize": safe_page_size,
+        "total": safe_total,
+        "pages": total_pages,
+        "range": range_key,
+        "sort": sort_order,
     }
 
 

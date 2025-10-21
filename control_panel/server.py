@@ -189,6 +189,22 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
             self._handle_api(
                 lambda: (HTTPStatus.OK, logic.get_private_telegram_settings())
             )
+        elif path == "/api/v1/code-stats":
+            page = self._parse_positive_int(query.get("page", ["1"]), 1)
+            page_size = self._parse_positive_int(query.get("pageSize", ["20"]), 20)
+            range_key = (query.get("range") or ["1m"])[0]
+            sort_order = (query.get("sort") or ["desc"])[0]
+            self._handle_api(
+                lambda: (
+                    HTTPStatus.OK,
+                    logic.get_code_statistics(
+                        range_key=range_key,
+                        sort_order=sort_order,
+                        page=page,
+                        page_size=page_size,
+                    ),
+                )
+            )
         elif path == "/api/v1/audit-log":
             page = self._parse_positive_int(query.get("page", ["1"]), 1)
             page_size = self._parse_positive_int(query.get("pageSize", ["20"]), 20)

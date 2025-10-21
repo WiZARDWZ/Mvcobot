@@ -60,6 +60,71 @@ const monthlyData = getLastMonths(12).map(({ month }) => {
   };
 });
 
+const samplePartNames = [
+  'سنسور اکسیژن',
+  'پمپ بنزین',
+  'چراغ جلو',
+  'سوییچ اصلی',
+  'لنت ترمز جلو',
+  'سیبک فرمان',
+  'کمک فنر عقب',
+  'فیلتر هوای موتور',
+  'رادیاتور آب',
+  'میل موجگیر',
+];
+
+const codeStatsBase = Array.from({ length: 60 }, (_, index) => {
+  const raw = `${Math.floor(seededRandom() * 9000000000) + 1000000000}`;
+  const code = `${raw.slice(0, 5)}-${raw.slice(5, 10)}`;
+  const partName = samplePartNames[index % samplePartNames.length];
+  const baseCount = Math.floor(seededRandom() * 180 + 15);
+  return { code, partName, baseCount };
+});
+
+function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize }) {
+  const factors = {
+    '1m': 0.65,
+    '2m': 0.8,
+    '3m': 0.9,
+    '6m': 1,
+    '1y': 1.15,
+    all: 1.3,
+  };
+  const key = (rangeKey || '1m').toLowerCase();
+  const factor = factors[key] ?? factors['1m'];
+  const direction = (sortOrder || 'desc').toLowerCase().startsWith('a') ? 'asc' : 'desc';
+
+  const enriched = codeStatsBase.map((item) => {
+    const jitter = Math.floor(seededRandom() * 12);
+    const requestCount = Math.max(1, Math.round(item.baseCount * factor + jitter));
+    return { code: item.code, partName: item.partName, requestCount };
+  });
+
+  enriched.sort((a, b) => {
+    if (a.requestCount === b.requestCount) {
+      return a.code.localeCompare(b.code, 'fa');
+    }
+    return direction === 'asc'
+      ? a.requestCount - b.requestCount
+      : b.requestCount - a.requestCount;
+  });
+
+  const total = enriched.length;
+  const safePageSize = Math.max(1, pageSize);
+  const pages = Math.max(1, Math.ceil(total / safePageSize));
+  const safePage = Math.min(Math.max(1, page), pages);
+  const startIndex = (safePage - 1) * safePageSize;
+  const items = enriched.slice(startIndex, startIndex + safePageSize);
+
+  return {
+    items,
+    page: safePage,
+    pageSize: safePageSize,
+    total,
+    pages,
+  };
+}
+
 export const API_EVENTS = {
   FALLBACK: 'mvcobot:api-fallback',
 };
@@ -210,6 +275,7 @@ const mockStore = {
     blacklist: [437739989],
     dataSourceOrigin: 'mock',
   },
+  codeStats: codeStatsBase,
 };
 
 const delay = (ms = 360) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -341,6 +407,43 @@ export const api = {
       emitFallback({ method: 'getMetrics', reason: 'usingFallback' });
     }
     return result;
+  },
+
+  async getCodeStats({ range = '1m', sort = 'desc', page = 1, pageSize = 20 } = {}) {
+    const params = new URLSearchParams({
+      range,
+      sort,
+      page: String(page),
+      pageSize: String(pageSize),
+    });
+
+    const mockHandler = () => {
+      const snapshot = buildMockCodeStats({
+        rangeKey: range,
+        sortOrder: sort,
+        page,
+        pageSize,
+      });
+      return {
+        items: snapshot.items.map((item) => ({
+          code: item.code,
+          partName: item.partName,
+          requestCount: item.requestCount,
+        })),
+        page: snapshot.page,
+        pageSize: snapshot.pageSize,
+        total: snapshot.total,
+        pages: snapshot.pages,
+        range,
+        sort,
+      };
+    };
+
+    return runWithFallback(
+      'getCodeStats',
+      () => request(`/api/v1/code-stats?${params.toString()}`),
+      mockHandler
+    );
   },
 
   async getCommands() {
