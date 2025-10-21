@@ -127,6 +127,11 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/v1/settings":
             self._handle_api(lambda: (HTTPStatus.OK, logic.update_settings(body)))
             return
+        if path == "/api/v1/private-telegram/settings":
+            self._handle_api(
+                lambda: (HTTPStatus.OK, logic.update_private_telegram_settings(body))
+            )
+            return
 
         if path.startswith("/api/v1/commands/"):
             command_id = path.rsplit("/", 1)[-1]
@@ -167,6 +172,10 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
             self._handle_api(lambda: (HTTPStatus.OK, logic.get_blocklist()))
         elif path == "/api/v1/settings":
             self._handle_api(lambda: (HTTPStatus.OK, logic.get_settings()))
+        elif path == "/api/v1/private-telegram/settings":
+            self._handle_api(
+                lambda: (HTTPStatus.OK, logic.get_private_telegram_settings())
+            )
         elif path == "/api/v1/audit-log":
             self._handle_api(lambda: (HTTPStatus.OK, logic.get_audit_log()))
         else:

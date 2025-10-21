@@ -16,6 +16,7 @@ except Exception as exc:  # pragma: no cover - optional dependency
 _EVENT_LOOP: Optional[asyncio.AbstractEventLoop] = None
 _PENDING_WA_STATE: Optional[bool] = None
 _LAST_WA_STATE: Optional[bool] = None
+_LAST_PRIVATE_STATE: Optional[bool] = None
 
 
 def register_event_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -83,10 +84,35 @@ def _apply_whatsapp_state(enabled: bool) -> None:
         LOGGER.warning("Failed to apply WhatsApp state %s: %s", enabled, exc)
 
 
+def _apply_private_state(enabled: bool) -> None:
+    global _LAST_PRIVATE_STATE
+    try:
+        from privateTelegram.config.settings import save_settings, settings  # type: ignore
+    except Exception:  # pragma: no cover - optional dependency
+        LOGGER.debug(
+            "Private Telegram settings unavailable for runtime sync.",
+            exc_info=True,
+        )
+        return
+
+    current = bool(settings.get("enabled", True))
+    if current == enabled and _LAST_PRIVATE_STATE == enabled:
+        return
+
+    settings["enabled"] = enabled
+    try:
+        save_settings()
+        _LAST_PRIVATE_STATE = enabled
+    except Exception as exc:  # pragma: no cover - warn on failure
+        LOGGER.warning("Failed to persist private Telegram state %s: %s", enabled, exc)
+
+
 def apply_platform_states(platforms: Dict[str, bool], *, active: bool) -> None:
     """Apply platform enablement flags to the running services."""
     whatsapp_enabled = bool(platforms.get("whatsapp", True)) and active
     _apply_whatsapp_state(whatsapp_enabled)
+    private_enabled = bool(platforms.get("privateTelegram", True)) and active
+    _apply_private_state(private_enabled)
 
 
 def refresh_working_hours_cache() -> None:
