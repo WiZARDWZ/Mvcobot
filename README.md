@@ -64,20 +64,27 @@ When the application cannot reach the configured databases, it automatically swi
 To create a single-file executable that bundles the Telegram bot, control panel API, and static assets, run the following command (PowerShell / CMD):
 
 ```bash
-pyinstaller -F -n mvco90_stable --paths . \
+pyinstaller -F -n mvco961_stable_web --paths . \
   --collect-all telegram \
   --collect-all playwright \
+  --collect-all privateTelegram \
   --collect-submodules playwright \
   --collect-submodules control_panel \
+  --collect-submodules privateTelegram \
   --hidden-import playwright.async_api \
   --hidden-import playwright.sync_api \
+  --add-data "privateTelegram/bot_settings.json;privateTelegram" \
+  --add-data "privateTelegram/inventory.xlsx;privateTelegram" \
+  --add-data "privateTelegram/session.session;privateTelegram" \
   --add-data "webControl;webControl" \
   bot.py
 ```
 
-> **Tip:** On Linux or macOS replace the semicolon in the `--add-data` flag with a colon: `--add-data "webControl:webControl"`.
+> **Tip:** On Linux or macOS replace the semicolons in each `--add-data` flag with colons. For example: `--add-data "privateTelegram/bot_settings.json:privateTelegram"`.
 
-The generated binary appears in the `dist/` directory as `mvco90_stable`. Distribute this file together with the Playwright browser dependencies that were installed via `playwright install`.
+The generated binary appears in the `dist/` directory as `mvco961_stable_web`. Distribute this file together with the Playwright browser dependencies that were installed via `playwright install`.
+
+The extra `privateTelegram` collection and data flags ensure the bundled executable ships with the legacy private bot modules, its configuration JSON, the default Excel cache, and the Telethon session file so the background thread can start without missing-resource errors.
 
 ## Troubleshooting
 

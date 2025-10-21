@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from http import HTTPStatus
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from database.connector_bot import (
@@ -23,6 +25,17 @@ from handlers.inventory import refresh_inventory_cache_once
 from . import runtime
 
 LOGGER = logging.getLogger(__name__)
+
+try:
+    from privateTelegram.config.settings import (  # type: ignore
+        load_settings as _private_reload_settings,
+        save_settings as _private_save_settings,
+        settings as _private_settings,
+    )
+except Exception:  # pragma: no cover - optional dependency
+    _private_reload_settings = None
+    _private_save_settings = None
+    _private_settings = None
 
 UTC = timezone.utc
 
@@ -73,7 +86,6 @@ AUDIT_LOG_KEY = "panel_audit_log_v1"
 WORKING_DAY_ORDER = [5, 6, 0, 1, 2, 3, 4]  # Saturday → Friday (Python weekday numbering)
 
 MAX_AUDIT_LOG_ENTRIES = 200
-
 
 class ControlPanelError(Exception):
     """Raised for validation or domain errors that should be surfaced to the API."""
@@ -191,6 +203,63 @@ def _append_audit_event(message: str, *, actor: str = "کنترل‌پنل", det
     entries = _load_audit_log_fallback()
     entries.insert(0, entry)
     _persist_audit_log_fallback(entries)
+
+
+def _ensure_private_settings() -> Dict[str, Any]:
+    if (
+        _private_settings is None
+        or _private_save_settings is None
+        or _private_reload_settings is None
+    ):
+        raise ControlPanelError(
+            "ماژول تلگرام خصوصی در دسترس نیست.", status=HTTPStatus.SERVICE_UNAVAILABLE
+        )
+    try:
+        _private_reload_settings()
+    except Exception as exc:  # pragma: no cover - defensive I/O guard
+        LOGGER.warning("Failed to reload private Telegram settings: %s", exc)
+        raise ControlPanelError("خواندن تنظیمات تلگرام خصوصی ممکن نشد.", status=500)
+    return _private_settings
+
+
+def _snapshot_private_settings() -> Dict[str, Any]:
+    data = _ensure_private_settings()
+    try:
+        return json.loads(json.dumps(data))
+    except Exception:
+        # Fallback to shallow copy if encoding fails for unexpected types
+        return dict(data)
+
+
+def _normalize_group_list(value: Any, field_name: str) -> List[int]:
+    if value is None or value == "":
+        return []
+    items: List[int] = []
+    source: Iterable[Any]
+    if isinstance(value, str):
+        source = [token for token in re.split(r"[\s,\n]+", value) if token.strip()]
+    elif isinstance(value, Iterable):
+        source = value
+    else:
+        raise ControlPanelError(f"ساختار {field_name} نامعتبر است.")
+
+    for item in source:
+        if item in (None, ""):
+            continue
+        try:
+            items.append(int(str(item).strip()))
+        except Exception:
+            raise ControlPanelError(f"مقادیر {field_name} باید عددی باشند.")
+    return items
+
+
+def _normalize_time_range(payload: Any, start_label: str, end_label: str) -> Dict[str, str]:
+    data = payload or {}
+    if not isinstance(data, dict):
+        raise ControlPanelError("ساختار بازه زمانی نامعتبر است.")
+    start = _normalize_time(data.get("start"), start_label)
+    end = _normalize_time(data.get("end"), end_label)
+    return {"start": start, "end": end}
 
 
 def _format_month_label(year: int, month: int) -> str:
@@ -878,6 +947,203 @@ def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
         _append_audit_event("به‌روزرسانی تنظیمات", details=details)
 
     return get_settings()
+
+
+def get_private_telegram_settings() -> Dict[str, Any]:
+    snapshot = _snapshot_private_settings()
+    delivery = snapshot.get("delivery_info") or {}
+
+    def _extract_range(key: str) -> Dict[str, str]:
+        data = snapshot.get(key) or {}
+        if isinstance(data, dict):
+            return {
+                "start": str(data.get("start") or ""),
+                "end": str(data.get("end") or ""),
+            }
+        return {"start": "", "end": ""}
+
+    def _as_int_list(values: Any) -> List[int]:
+        try:
+            return [int(str(item).strip()) for item in (values or []) if str(item).strip()]
+        except Exception:
+            return []
+
+    return {
+        "enabled": bool(snapshot.get("enabled", True)),
+        "dmEnabled": bool(snapshot.get("dm_enabled", snapshot.get("dmEnabled", True))),
+        "apiId": snapshot.get("api_id"),
+        "apiHash": snapshot.get("api_hash", ""),
+        "phoneNumber": snapshot.get("phone_number", ""),
+        "dataSource": snapshot.get("data_source", "sql"),
+        "excelFile": snapshot.get("excel_file", ""),
+        "cacheDurationMinutes": int(snapshot.get("cache_duration_minutes") or 0),
+        "mainGroupId": snapshot.get("main_group_id"),
+        "newGroupId": snapshot.get("new_group_id"),
+        "adminGroupIds": _as_int_list(snapshot.get("admin_group_ids")),
+        "secondaryGroupIds": _as_int_list(snapshot.get("secondary_group_ids")),
+        "workingHours": _extract_range("working_hours"),
+        "thursdayHours": _extract_range("thursday_hours"),
+        "disableFriday": bool(snapshot.get("disable_friday", False)),
+        "lunchBreak": _extract_range("lunch_break"),
+        "queryLimit": snapshot.get("query_limit"),
+        "deliveryInfo": {
+            "before15": str(delivery.get("before_15") or ""),
+            "after15": str(delivery.get("after_15") or ""),
+        },
+        "changeoverHour": str(snapshot.get("changeover_hour") or ""),
+        "blacklist": _as_int_list(snapshot.get("blacklist")),
+        "dataSourceOrigin": "json",
+    }
+
+
+def update_private_telegram_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ControlPanelError("ساختار تنظیمات نامعتبر است.")
+
+    settings_ref = _ensure_private_settings()
+    changes: List[str] = []
+
+    def _set_field(key: str, value: Any, label: str) -> None:
+        settings_ref[key] = value
+        changes.append(label)
+
+    if "enabled" in payload:
+        _set_field("enabled", bool(payload.get("enabled")), "وضعیت ربات خصوصی")
+
+    if "dmEnabled" in payload:
+        _set_field("dm_enabled", bool(payload.get("dmEnabled")), "پاسخ خصوصی")
+
+    if "apiId" in payload:
+        try:
+            api_id = int(str(payload.get("apiId")).strip())
+        except Exception:
+            raise ControlPanelError("API ID باید عددی باشد.")
+        if api_id <= 0:
+            raise ControlPanelError("API ID باید بزرگ‌تر از صفر باشد.")
+        _set_field("api_id", api_id, "API ID")
+
+    if "apiHash" in payload:
+        api_hash = str(payload.get("apiHash") or "").strip()
+        if not api_hash:
+            raise ControlPanelError("API Hash نمی‌تواند خالی باشد.")
+        _set_field("api_hash", api_hash, "API Hash")
+
+    if "phoneNumber" in payload:
+        phone = str(payload.get("phoneNumber") or "").strip()
+        if not phone:
+            raise ControlPanelError("شماره تلفن نمی‌تواند خالی باشد.")
+        _set_field("phone_number", phone, "شماره تماس")
+
+    if "dataSource" in payload:
+        source = str(payload.get("dataSource") or "").strip().lower() or "sql"
+        if source not in {"sql", "excel"}:
+            raise ControlPanelError("منبع داده نامعتبر است. فقط sql یا excel مجاز است.")
+        _set_field("data_source", source, "منبع داده")
+
+    if "excelFile" in payload:
+        excel_file = str(payload.get("excelFile") or "").strip()
+        _set_field("excel_file", excel_file, "فایل اکسل")
+
+    if "cacheDurationMinutes" in payload:
+        try:
+            cache_minutes = int(str(payload.get("cacheDurationMinutes", 0)).strip() or 0)
+        except Exception:
+            raise ControlPanelError("مدت کش باید عددی باشد.")
+        if cache_minutes < 0:
+            raise ControlPanelError("مدت کش نمی‌تواند منفی باشد.")
+        _set_field("cache_duration_minutes", cache_minutes, "مدت کش")
+
+    if "mainGroupId" in payload:
+        try:
+            main_group = int(str(payload.get("mainGroupId")).strip())
+        except Exception:
+            raise ControlPanelError("شناسه گروه اصلی نامعتبر است.")
+        _set_field("main_group_id", main_group, "گروه اصلی")
+
+    if "newGroupId" in payload:
+        try:
+            new_group = int(str(payload.get("newGroupId")).strip())
+        except Exception:
+            raise ControlPanelError("شناسه گروه جدید نامعتبر است.")
+        _set_field("new_group_id", new_group, "گروه جدید")
+
+    if "adminGroupIds" in payload:
+        admin_groups = _normalize_group_list(payload.get("adminGroupIds"), "گروه‌های مدیریت")
+        _set_field("admin_group_ids", admin_groups, "گروه‌های مدیریت")
+
+    if "secondaryGroupIds" in payload:
+        secondary_groups = _normalize_group_list(
+            payload.get("secondaryGroupIds"), "گروه‌های فرعی"
+        )
+        _set_field("secondary_group_ids", secondary_groups, "گروه‌های فرعی")
+
+    if "workingHours" in payload:
+        working = _normalize_time_range(
+            payload.get("workingHours"), "شروع ساعات کاری", "پایان ساعات کاری"
+        )
+        _set_field("working_hours", working, "ساعات کاری")
+
+    if "thursdayHours" in payload:
+        thursday = _normalize_time_range(
+            payload.get("thursdayHours"), "شروع پنج‌شنبه", "پایان پنج‌شنبه"
+        )
+        _set_field("thursday_hours", thursday, "ساعات پنج‌شنبه")
+
+    if "disableFriday" in payload:
+        _set_field("disable_friday", bool(payload.get("disableFriday")), "وضعیت جمعه")
+
+    if "lunchBreak" in payload:
+        lunch = _normalize_time_range(
+            payload.get("lunchBreak"), "شروع ناهار", "پایان ناهار"
+        )
+        _set_field("lunch_break", lunch, "استراحت ناهار")
+
+    if "queryLimit" in payload:
+        limit_value = payload.get("queryLimit")
+        if limit_value in (None, ""):
+            if "query_limit" in settings_ref:
+                del settings_ref["query_limit"]
+                changes.append("محدودیت استعلام")
+        else:
+            try:
+                limit_int = int(str(limit_value).strip())
+            except Exception:
+                raise ControlPanelError("محدودیت استعلام باید عددی باشد.")
+            if limit_int < 0:
+                raise ControlPanelError("محدودیت استعلام نمی‌تواند منفی باشد.")
+            _set_field("query_limit", limit_int, "محدودیت استعلام")
+
+    if "deliveryInfo" in payload:
+        delivery_payload = payload.get("deliveryInfo") or {}
+        if not isinstance(delivery_payload, dict):
+            raise ControlPanelError("ساختار متن تحویل نامعتبر است.")
+        delivery = settings_ref.setdefault("delivery_info", {})
+        delivery["before_15"] = str(delivery_payload.get("before15") or "").strip()
+        delivery["after_15"] = str(delivery_payload.get("after15") or "").strip()
+        changes.append("پیام تحویل")
+
+    if "changeoverHour" in payload:
+        changeover = _normalize_time(payload.get("changeoverHour"), "ساعت تغییر متن")
+        _set_field("changeover_hour", changeover, "ساعت تغییر متن")
+
+    if "blacklist" in payload:
+        blacklist = _normalize_group_list(payload.get("blacklist"), "لیست سیاه")
+        _set_field("blacklist", blacklist, "لیست سیاه خصوصی")
+
+    try:
+        _private_save_settings()
+    except Exception as exc:  # pragma: no cover - file I/O safety
+        LOGGER.error("Failed to persist private Telegram settings: %s", exc)
+        raise ControlPanelError("ذخیره تنظیمات تلگرام خصوصی امکان‌پذیر نبود.", status=500)
+
+    if changes:
+        summary = "، ".join(sorted(set(changes)))
+        _append_audit_event(
+            "به‌روزرسانی تنظیمات تلگرام خصوصی",
+            details=summary,
+        )
+
+    return get_private_telegram_settings()
 
 
 def toggle_bot(active: bool) -> Dict[str, Any]:
