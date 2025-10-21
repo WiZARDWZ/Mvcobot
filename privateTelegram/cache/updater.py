@@ -51,24 +51,41 @@ def _load_process_data() -> _ProcessFn:
 TZ = ZoneInfo("Asia/Tehran")
 
 
+def _refresh_cache_once(process_data: _ProcessFn | None = None) -> bool:
+    loader = process_data or _load_process_data()
+    source = settings.get("data_source", "sql").lower()
+    if source == "excel":
+        raw = get_excel_data()
+    else:
+        raw = get_sql_data()
+
+    if not raw:
+        return False
+
+    processed = loader(raw)
+    state.cached_simplified_data.clear()
+    state.cached_simplified_data.extend(processed)
+    state.last_cache_update = datetime.now(TZ)
+    print(f"Cache updated from {source}: {len(processed)} records.")
+    return True
+
+
+def refresh_cache_once() -> bool:
+    """Refresh the private Telegram cache immediately."""
+    return _refresh_cache_once()
+
+
 async def update_cache_periodically() -> None:
     process_data = _load_process_data()
 
     while True:
-        source = settings.get("data_source", "sql").lower()
-        if source == "excel":
-            raw = get_excel_data()
-        else:
-            raw = get_sql_data()
-
-        if raw:
-            processed = process_data(raw)
-            state.cached_simplified_data.clear()
-            state.cached_simplified_data.extend(processed)
-            state.last_cache_update = datetime.now(TZ)
-            print(f"Cache updated from {source}: {len(processed)} records.")
-        else:
-            print(f"⚠️ داده‌ای از منبع «{source}» دریافت نشد.")
+        try:
+            updated = _refresh_cache_once(process_data)
+            if not updated:
+                source = settings.get("data_source", "sql")
+                print(f"⚠️ داده‌ای از منبع «{source}» دریافت نشد.")
+        except Exception as exc:
+            print(f"⚠️ به‌روزرسانی کش خصوصی ناموفق بود: {exc}")
 
         await asyncio.sleep(settings.get("cache_duration_minutes", 20) * 60)
 

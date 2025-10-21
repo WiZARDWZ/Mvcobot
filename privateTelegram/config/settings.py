@@ -46,7 +46,12 @@ def _ensure_runtime_artifact(filename: str) -> Path:
 
 
 # Ensure runtime copies of the bundled assets exist when frozen.
-for artifact in ("bot_settings.json", "inventory.xlsx", "session.session"):
+for artifact in (
+    "bot_settings.json",
+    "inventory.xlsx",
+    "session.session",
+    "private_metrics.json",
+):
     _ensure_runtime_artifact(artifact)
 
 

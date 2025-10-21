@@ -68,6 +68,12 @@ except ModuleNotFoundError:
         find_partial_matches,
     )
 
+try:
+    from privateTelegram.metrics.tracker import record_query
+except ModuleNotFoundError:
+    _ensure_private_package()
+    from privateTelegram.metrics.tracker import record_query  # type: ignore
+
 TZ = ZoneInfo("Asia/Tehran")
 
 # ───────────────────────── Regex patterns ──────────────────────────
@@ -160,6 +166,7 @@ async def handle_new_message(event):
         # 8a) Partial code
         if PARTIAL_PATTERN.match(token):
             bot_state.total_queries += 1
+            record_query(now_dt)
             suggestions = find_partial_matches(norm)
             if not suggestions:
                 continue
@@ -182,6 +189,7 @@ async def handle_new_message(event):
         # 8b) Full code
         elif FULL_PATTERN.match(token):
             bot_state.total_queries += 1
+            record_query(now_dt)
             key = f"{user_id}:{norm}"
             if chat_id == MAIN_GROUP_ID and user_id not in ADMIN_GROUP_IDS:
                 last = bot_state.sent_messages.get(key)
@@ -273,6 +281,7 @@ async def handle_private_message(event):
         # Partial code in PM
         if PARTIAL_PATTERN.match(token):
             bot_state.total_queries += 1
+            record_query(now_dt)
             suggestions = find_partial_matches(norm)
             if not suggestions:
                 continue
@@ -296,6 +305,7 @@ async def handle_private_message(event):
         # Full code in PM
         elif FULL_PATTERN.match(token):
             bot_state.total_queries += 1
+            record_query(now_dt)
             key = f"{user_id}:{norm}"
             if user_id not in ADMIN_GROUP_IDS:
                 last = bot_state.sent_messages.get(key)

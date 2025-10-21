@@ -9,6 +9,7 @@ const defaultConfig = {
   API_KEY: '',
   TELEGRAM_ENABLED: true,
   WHATSAPP_ENABLED: true,
+  PRIVATE_TELEGRAM_ENABLED: true,
 };
 
 const DEFAULT_FALLBACK_MESSAGE =
@@ -49,11 +50,13 @@ function getLastMonths(count = 12) {
 const monthlyData = getLastMonths(12).map(({ month }) => {
   const telegram = Math.floor(seededRandom() * 120 + 30);
   const whatsapp = Math.floor(seededRandom() * 180 + 45);
+  const privateTelegram = Math.floor(seededRandom() * 90 + 20);
   return {
     month,
     telegram,
     whatsapp,
-    all: telegram + whatsapp,
+    privateTelegram,
+    all: telegram + whatsapp + privateTelegram,
   };
 });
 
@@ -67,9 +70,10 @@ const mockStore = {
       (acc, item) => ({
         telegram: acc.telegram + item.telegram,
         whatsapp: acc.whatsapp + item.whatsapp,
+        privateTelegram: acc.privateTelegram + item.privateTelegram,
         all: acc.all + item.all,
       }),
-      { telegram: 0, whatsapp: 0, all: 0 }
+      { telegram: 0, whatsapp: 0, privateTelegram: 0, all: 0 }
     ),
     monthly: monthlyData,
     cache: {
@@ -83,6 +87,11 @@ const mockStore = {
         weekly: DEFAULT_WEEKLY_SCHEDULE.map((item) => ({ ...item })),
       },
       message: 'ربات فعال و آماده پاسخ‌گویی است.',
+      platforms: {
+        telegram: defaultConfig.TELEGRAM_ENABLED,
+        whatsapp: defaultConfig.WHATSAPP_ENABLED,
+        privateTelegram: defaultConfig.PRIVATE_TELEGRAM_ENABLED,
+      },
       operations: {
         lunchBreak: { start: '12:30', end: '13:30' },
         queryLimit: 50,
@@ -141,6 +150,7 @@ const mockStore = {
     platforms: {
       telegram: defaultConfig.TELEGRAM_ENABLED,
       whatsapp: defaultConfig.WHATSAPP_ENABLED,
+      privateTelegram: defaultConfig.PRIVATE_TELEGRAM_ENABLED,
     },
     lunchBreak: { start: '12:30', end: '13:30' },
     queryLimit: 50,
@@ -453,6 +463,10 @@ export const api = {
         mockStore.settings.platforms = {
           ...mockStore.settings.platforms,
           ...payload.platforms,
+        };
+        mockStore.metrics.status.platforms = {
+          ...mockStore.metrics.status.platforms,
+          ...mockStore.settings.platforms,
         };
       }
       if (payload.weekly) {

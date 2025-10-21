@@ -37,6 +37,16 @@ except Exception:  # pragma: no cover - optional dependency
     _private_save_settings = None
     _private_settings = None
 
+try:  # pragma: no cover - optional dependency
+    from privateTelegram.metrics.tracker import get_snapshot as _private_metrics_snapshot  # type: ignore
+except Exception:
+    _private_metrics_snapshot = None
+
+try:  # pragma: no cover - optional dependency
+    from privateTelegram.cache import refresh_cache_once as _private_refresh_cache  # type: ignore
+except Exception:
+    _private_refresh_cache = None
+
 UTC = timezone.utc
 
 PERSIAN_MONTHS = [
@@ -141,6 +151,27 @@ def _load_json_setting(key: str, default: Any) -> Any:
         return default
 
 
+def _collect_private_telegram_metrics() -> Tuple[int, Dict[Tuple[int, int], int]]:
+    if not _private_metrics_snapshot:
+        return 0, {}
+
+    try:
+        total, entries = _private_metrics_snapshot(limit=24)
+    except Exception:
+        LOGGER.debug("Failed to read private Telegram metrics snapshot", exc_info=True)
+        return 0, {}
+
+    buckets: Dict[Tuple[int, int], int] = {}
+    for year, month, count in entries:
+        try:
+            key = (int(year), int(month))
+            buckets[key] = buckets.get(key, 0) + int(count)
+        except Exception:
+            continue
+
+    return int(total), buckets
+
+
 def _save_json_setting(key: str, value: Any) -> None:
     try:
         set_setting(key, json.dumps(value, ensure_ascii=False))
@@ -231,6 +262,23 @@ def _snapshot_private_settings() -> Dict[str, Any]:
         return dict(data)
 
 
+def _default_private_platform_enabled() -> bool:
+    if _private_settings is None:
+        return True
+
+    try:
+        data = _ensure_private_settings()
+    except ControlPanelError:
+        return True
+    except Exception:
+        LOGGER.debug(
+            "Failed to determine private Telegram default platform state", exc_info=True
+        )
+        return True
+
+    return bool(data.get("enabled", True))
+
+
 def _normalize_group_list(value: Any, field_name: str) -> List[int]:
     if value is None or value == "":
         return []
@@ -319,14 +367,23 @@ def _column_exists(cur, table_name: str, column_name: str) -> bool:
 
 
 def _collect_metrics(cur) -> Tuple[Dict[str, int], List[Dict[str, Any]]]:
-    totals = {"telegram": 0, "whatsapp": 0, "all": 0}
+    totals = {"telegram": 0, "whatsapp": 0, "privateTelegram": 0, "all": 0}
     monthly_map: OrderedDict = OrderedDict()
 
-    def record(year: int, month: int, telegram: int = 0, whatsapp: int = 0) -> None:
+    def record(
+        year: int,
+        month: int,
+        telegram: int = 0,
+        whatsapp: int = 0,
+        private_telegram: int = 0,
+    ) -> None:
         key = (year, month)
-        bucket = monthly_map.setdefault(key, {"telegram": 0, "whatsapp": 0})
+        bucket = monthly_map.setdefault(
+            key, {"telegram": 0, "whatsapp": 0, "privateTelegram": 0}
+        )
         bucket["telegram"] += telegram
         bucket["whatsapp"] += whatsapp
+        bucket["privateTelegram"] += private_telegram
 
     if _column_exists(cur, "message_log", "platform"):
         rows = cur.execute(
@@ -395,18 +452,27 @@ def _collect_metrics(cur) -> Tuple[Dict[str, int], List[Dict[str, Any]]]:
                 record(year, month, whatsapp=count)
             break
 
-    totals["all"] = totals["telegram"] + totals["whatsapp"]
+    private_total, private_monthly = _collect_private_telegram_metrics()
+    totals["privateTelegram"] += private_total
+    for (year, month), count in private_monthly.items():
+        record(year, month, private_telegram=count)
+
+    totals["all"] = (
+        totals["telegram"] + totals["whatsapp"] + totals["privateTelegram"]
+    )
 
     monthly: List[Dict[str, Any]] = []
     for (year, month), values in monthly_map.items():
         telegram = values.get("telegram", 0)
         whatsapp = values.get("whatsapp", 0)
+        private_telegram = values.get("privateTelegram", 0)
         monthly.append(
             {
                 "month": _format_month_label(year, month),
                 "telegram": telegram,
                 "whatsapp": whatsapp,
-                "all": telegram + whatsapp,
+                "privateTelegram": private_telegram,
+                "all": telegram + whatsapp + private_telegram,
             }
         )
 
@@ -439,7 +505,13 @@ def _aggregate_metrics_from_db() -> Metrics:
 def _build_mock_totals() -> Dict[str, int]:
     telegram = 320
     whatsapp = 185
-    return {"telegram": telegram, "whatsapp": whatsapp, "all": telegram + whatsapp}
+    private_telegram = 210
+    return {
+        "telegram": telegram,
+        "whatsapp": whatsapp,
+        "privateTelegram": private_telegram,
+        "all": telegram + whatsapp + private_telegram,
+    }
 
 
 def _build_mock_monthly() -> List[Dict[str, Any]]:
@@ -452,12 +524,14 @@ def _build_mock_monthly() -> List[Dict[str, Any]]:
         label = _format_month_label(year, month)
         telegram = 50 + (offset * 3)
         whatsapp = 35 + (offset * 2)
+        private_telegram = 40 + (offset * 2)
         results.append(
             {
                 "month": label,
                 "telegram": telegram,
                 "whatsapp": whatsapp,
-                "all": telegram + whatsapp,
+                "privateTelegram": private_telegram,
+                "all": telegram + whatsapp + private_telegram,
             }
         )
     return results
@@ -465,7 +539,11 @@ def _build_mock_monthly() -> List[Dict[str, Any]]:
 
 def _load_platform_settings(enabled: bool) -> Dict[str, bool]:
     stored = _load_json_setting(PLATFORMS_KEY, None)
-    defaults = {"telegram": enabled, "whatsapp": True}
+    defaults = {
+        "telegram": enabled,
+        "whatsapp": True,
+        "privateTelegram": _default_private_platform_enabled(),
+    }
     merged = {**defaults}
     if isinstance(stored, dict):
         for key, value in stored.items():
@@ -1176,6 +1254,17 @@ def invalidate_cache() -> Dict[str, Any]:
     except Exception as exc:
         LOGGER.warning("Failed to refresh inventory cache: %s", exc)
         raise ControlPanelError("به‌روزرسانی کش با خطا مواجه شد.", status=500)
+
+    if _private_refresh_cache:
+        try:
+            updated = _private_refresh_cache()
+            if not updated:
+                LOGGER.info("Private Telegram cache refresh returned no data.")
+        except Exception as exc:
+            LOGGER.warning("Failed to refresh private Telegram cache: %s", exc)
+            raise ControlPanelError(
+                "به‌روزرسانی کش تلگرام خصوصی با خطا مواجه شد.", status=500
+            )
 
     timestamp = _now_iso()
     set_setting(CACHE_KEY, timestamp)
