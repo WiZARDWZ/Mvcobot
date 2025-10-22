@@ -14,17 +14,18 @@ PLATFORM_SETTINGS_KEY = "panel_platforms_v1"
 
 def _load_platform_flags() -> Dict[str, bool]:
     raw = get_setting(PLATFORM_SETTINGS_KEY)
+    defaults = {"telegram": True, "whatsapp": True, "privateTelegram": True}
     if not raw:
-        return {"telegram": True, "whatsapp": True}
+        return defaults
     try:
         data = json.loads(raw)
         if isinstance(data, dict):
-            telegram = bool(data.get("telegram", True))
-            whatsapp = bool(data.get("whatsapp", True))
-            return {"telegram": telegram, "whatsapp": whatsapp}
+            for key in defaults:
+                if key in data:
+                    defaults[key] = bool(data.get(key))
     except Exception:
         LOGGER.warning("Failed to decode platform settings JSON. Falling back to defaults.")
-    return {"telegram": True, "whatsapp": True}
+    return defaults
 
 
 def get_platform_flags() -> Dict[str, bool]:
@@ -46,8 +47,8 @@ def is_platform_enabled(name: str, *, include_global: bool = True) -> bool:
     flags = _load_platform_flags()
     platform_enabled = flags.get(name, True)
 
-    if not include_global or name != "telegram":
-        return platform_enabled
+    if name == "telegram" and include_global:
+        global_value = (get_setting("enabled") or "true").strip().lower() == "true"
+        return platform_enabled and global_value
 
-    global_value = (get_setting("enabled") or "true").strip().lower() == "true"
-    return platform_enabled and global_value
+    return platform_enabled

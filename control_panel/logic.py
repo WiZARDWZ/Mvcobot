@@ -2,18 +2,23 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from http import HTTPStatus
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from database.connector_bot import (
     add_to_blacklist,
     fetch_audit_log_entries,
+    fetch_code_statistics,
     fetch_working_hours_entries,
     get_blacklist,
+    get_blacklist_with_meta,
     get_connection,
     get_setting,
+    refresh_missing_code_names,
     record_audit_event,
     remove_from_blacklist,
     save_working_hours_entries,
@@ -23,6 +28,27 @@ from handlers.inventory import refresh_inventory_cache_once
 from . import runtime
 
 LOGGER = logging.getLogger(__name__)
+
+try:
+    from privateTelegram.config.settings import (  # type: ignore
+        load_settings as _private_reload_settings,
+        save_settings as _private_save_settings,
+        settings as _private_settings,
+    )
+except Exception:  # pragma: no cover - optional dependency
+    _private_reload_settings = None
+    _private_save_settings = None
+    _private_settings = None
+
+try:  # pragma: no cover - optional dependency
+    from privateTelegram.metrics.tracker import get_snapshot as _private_metrics_snapshot  # type: ignore
+except Exception:
+    _private_metrics_snapshot = None
+
+try:  # pragma: no cover - optional dependency
+    from privateTelegram.cache import refresh_cache_once as _private_refresh_cache  # type: ignore
+except Exception:
+    _private_refresh_cache = None
 
 UTC = timezone.utc
 
@@ -69,11 +95,11 @@ DELIVERY_BEFORE_KEY = "delivery_before"
 DELIVERY_AFTER_KEY = "delivery_after"
 CHANGEOVER_KEY = "changeover_hour"
 AUDIT_LOG_KEY = "panel_audit_log_v1"
+BLOCKLIST_META_KEY = "panel_blocklist_meta_v1"
 
 WORKING_DAY_ORDER = [5, 6, 0, 1, 2, 3, 4]  # Saturday → Friday (Python weekday numbering)
 
 MAX_AUDIT_LOG_ENTRIES = 200
-
 
 class ControlPanelError(Exception):
     """Raised for validation or domain errors that should be surfaced to the API."""
@@ -129,12 +155,73 @@ def _load_json_setting(key: str, default: Any) -> Any:
         return default
 
 
+def _collect_private_telegram_metrics() -> Tuple[int, Dict[Tuple[int, int], int]]:
+    if not _private_metrics_snapshot:
+        return 0, {}
+
+    try:
+        total, entries = _private_metrics_snapshot(limit=24)
+    except Exception:
+        LOGGER.debug("Failed to read private Telegram metrics snapshot", exc_info=True)
+        return 0, {}
+
+    buckets: Dict[Tuple[int, int], int] = {}
+    for year, month, count in entries:
+        try:
+            key = (int(year), int(month))
+            buckets[key] = buckets.get(key, 0) + int(count)
+        except Exception:
+            continue
+
+    return int(total), buckets
+
+
 def _save_json_setting(key: str, value: Any) -> None:
     try:
         set_setting(key, json.dumps(value, ensure_ascii=False))
     except Exception:
         LOGGER.exception("Failed to persist JSON setting %s", key)
         raise ControlPanelError("ذخیره‌سازی تنظیمات امکان‌پذیر نبود. دوباره تلاش کنید.", status=500)
+
+
+def _load_blocklist_meta() -> Dict[str, str]:
+    data = _load_json_setting(BLOCKLIST_META_KEY, {})
+    if isinstance(data, dict):
+        result: Dict[str, str] = {}
+        for key, value in data.items():
+            key_text = str(key).strip()
+            value_text = str(value).strip()
+            if key_text and value_text:
+                result[key_text] = value_text
+        return result
+    return {}
+
+
+def _save_blocklist_meta(meta: Dict[str, str]) -> None:
+    try:
+        set_setting(BLOCKLIST_META_KEY, json.dumps(meta, ensure_ascii=False))
+    except Exception:
+        LOGGER.warning("Failed to persist blocklist metadata", exc_info=True)
+
+
+def _remember_blocklist_timestamp(user_id: int, timestamp: str) -> None:
+    key = str(user_id)
+    if not timestamp:
+        return
+    meta = _load_blocklist_meta()
+    if meta.get(key) == timestamp:
+        return
+    meta[key] = timestamp
+    _save_blocklist_meta(meta)
+
+
+def _forget_blocklist_timestamp(user_id: int) -> None:
+    key = str(user_id)
+    meta = _load_blocklist_meta()
+    if key not in meta:
+        return
+    meta.pop(key, None)
+    _save_blocklist_meta(meta)
 
 
 def _load_audit_log_fallback() -> List[Dict[str, Any]]:
@@ -191,6 +278,80 @@ def _append_audit_event(message: str, *, actor: str = "کنترل‌پنل", det
     entries = _load_audit_log_fallback()
     entries.insert(0, entry)
     _persist_audit_log_fallback(entries)
+
+
+def _ensure_private_settings() -> Dict[str, Any]:
+    if (
+        _private_settings is None
+        or _private_save_settings is None
+        or _private_reload_settings is None
+    ):
+        raise ControlPanelError(
+            "ماژول تلگرام خصوصی در دسترس نیست.", status=HTTPStatus.SERVICE_UNAVAILABLE
+        )
+    try:
+        _private_reload_settings()
+    except Exception as exc:  # pragma: no cover - defensive I/O guard
+        LOGGER.warning("Failed to reload private Telegram settings: %s", exc)
+        raise ControlPanelError("خواندن تنظیمات تلگرام خصوصی ممکن نشد.", status=500)
+    return _private_settings
+
+
+def _snapshot_private_settings() -> Dict[str, Any]:
+    data = _ensure_private_settings()
+    try:
+        return json.loads(json.dumps(data))
+    except Exception:
+        # Fallback to shallow copy if encoding fails for unexpected types
+        return dict(data)
+
+
+def _default_private_platform_enabled() -> bool:
+    if _private_settings is None:
+        return True
+
+    try:
+        data = _ensure_private_settings()
+    except ControlPanelError:
+        return True
+    except Exception:
+        LOGGER.debug(
+            "Failed to determine private Telegram default platform state", exc_info=True
+        )
+        return True
+
+    return bool(data.get("enabled", True))
+
+
+def _normalize_group_list(value: Any, field_name: str) -> List[int]:
+    if value is None or value == "":
+        return []
+    items: List[int] = []
+    source: Iterable[Any]
+    if isinstance(value, str):
+        source = [token for token in re.split(r"[\s,\n]+", value) if token.strip()]
+    elif isinstance(value, Iterable):
+        source = value
+    else:
+        raise ControlPanelError(f"ساختار {field_name} نامعتبر است.")
+
+    for item in source:
+        if item in (None, ""):
+            continue
+        try:
+            items.append(int(str(item).strip()))
+        except Exception:
+            raise ControlPanelError(f"مقادیر {field_name} باید عددی باشند.")
+    return items
+
+
+def _normalize_time_range(payload: Any, start_label: str, end_label: str) -> Dict[str, str]:
+    data = payload or {}
+    if not isinstance(data, dict):
+        raise ControlPanelError("ساختار بازه زمانی نامعتبر است.")
+    start = _normalize_time(data.get("start"), start_label)
+    end = _normalize_time(data.get("end"), end_label)
+    return {"start": start, "end": end}
 
 
 def _format_month_label(year: int, month: int) -> str:
@@ -250,14 +411,23 @@ def _column_exists(cur, table_name: str, column_name: str) -> bool:
 
 
 def _collect_metrics(cur) -> Tuple[Dict[str, int], List[Dict[str, Any]]]:
-    totals = {"telegram": 0, "whatsapp": 0, "all": 0}
+    totals = {"telegram": 0, "whatsapp": 0, "privateTelegram": 0, "all": 0}
     monthly_map: OrderedDict = OrderedDict()
 
-    def record(year: int, month: int, telegram: int = 0, whatsapp: int = 0) -> None:
+    def record(
+        year: int,
+        month: int,
+        telegram: int = 0,
+        whatsapp: int = 0,
+        private_telegram: int = 0,
+    ) -> None:
         key = (year, month)
-        bucket = monthly_map.setdefault(key, {"telegram": 0, "whatsapp": 0})
+        bucket = monthly_map.setdefault(
+            key, {"telegram": 0, "whatsapp": 0, "privateTelegram": 0}
+        )
         bucket["telegram"] += telegram
         bucket["whatsapp"] += whatsapp
+        bucket["privateTelegram"] += private_telegram
 
     if _column_exists(cur, "message_log", "platform"):
         rows = cur.execute(
@@ -326,18 +496,27 @@ def _collect_metrics(cur) -> Tuple[Dict[str, int], List[Dict[str, Any]]]:
                 record(year, month, whatsapp=count)
             break
 
-    totals["all"] = totals["telegram"] + totals["whatsapp"]
+    private_total, private_monthly = _collect_private_telegram_metrics()
+    totals["privateTelegram"] += private_total
+    for (year, month), count in private_monthly.items():
+        record(year, month, private_telegram=count)
+
+    totals["all"] = (
+        totals["telegram"] + totals["whatsapp"] + totals["privateTelegram"]
+    )
 
     monthly: List[Dict[str, Any]] = []
     for (year, month), values in monthly_map.items():
         telegram = values.get("telegram", 0)
         whatsapp = values.get("whatsapp", 0)
+        private_telegram = values.get("privateTelegram", 0)
         monthly.append(
             {
                 "month": _format_month_label(year, month),
                 "telegram": telegram,
                 "whatsapp": whatsapp,
-                "all": telegram + whatsapp,
+                "privateTelegram": private_telegram,
+                "all": telegram + whatsapp + private_telegram,
             }
         )
 
@@ -370,7 +549,13 @@ def _aggregate_metrics_from_db() -> Metrics:
 def _build_mock_totals() -> Dict[str, int]:
     telegram = 320
     whatsapp = 185
-    return {"telegram": telegram, "whatsapp": whatsapp, "all": telegram + whatsapp}
+    private_telegram = 210
+    return {
+        "telegram": telegram,
+        "whatsapp": whatsapp,
+        "privateTelegram": private_telegram,
+        "all": telegram + whatsapp + private_telegram,
+    }
 
 
 def _build_mock_monthly() -> List[Dict[str, Any]]:
@@ -383,12 +568,14 @@ def _build_mock_monthly() -> List[Dict[str, Any]]:
         label = _format_month_label(year, month)
         telegram = 50 + (offset * 3)
         whatsapp = 35 + (offset * 2)
+        private_telegram = 40 + (offset * 2)
         results.append(
             {
                 "month": label,
                 "telegram": telegram,
                 "whatsapp": whatsapp,
-                "all": telegram + whatsapp,
+                "privateTelegram": private_telegram,
+                "all": telegram + whatsapp + private_telegram,
             }
         )
     return results
@@ -396,7 +583,11 @@ def _build_mock_monthly() -> List[Dict[str, Any]]:
 
 def _load_platform_settings(enabled: bool) -> Dict[str, bool]:
     stored = _load_json_setting(PLATFORMS_KEY, None)
-    defaults = {"telegram": enabled, "whatsapp": True}
+    defaults = {
+        "telegram": enabled,
+        "whatsapp": True,
+        "privateTelegram": _default_private_platform_enabled(),
+    }
     merged = {**defaults}
     if isinstance(stored, dict):
         for key, value in stored.items():
@@ -606,6 +797,79 @@ def get_metrics() -> Dict[str, Any]:
     }
 
 
+def get_code_statistics(
+    *,
+    range_key: str,
+    sort_order: str,
+    page: int,
+    page_size: int,
+    search: Optional[str] = None,
+) -> Dict[str, Any]:
+    search_value = (search or "").strip()
+    try:
+        items, total = fetch_code_statistics(
+            range_key=range_key,
+            sort_order=sort_order,
+            page=page,
+            page_size=page_size,
+            search=search_value or None,
+        )
+    except Exception as exc:
+        LOGGER.warning("Failed to fetch code statistics: %s", exc)
+        raise ControlPanelError("دریافت آمار کدها امکان‌پذیر نبود.", status=500)
+
+    safe_page_size = max(1, min(int(page_size or 1), 100))
+    safe_total = max(0, int(total))
+    normalized_items: List[Dict[str, Any]] = []
+    for item in items:
+        code_value = str(item.get("code", "")).strip()
+        part_name = str(item.get("part_name", "-")).strip() or "-"
+        request_count = int(item.get("request_count", 0) or 0)
+        normalized_items.append(
+            {
+                "code": code_value,
+                "partName": part_name,
+                "requestCount": request_count,
+            }
+        )
+
+    total_pages = max(1, (safe_total + safe_page_size - 1) // safe_page_size)
+    current_page = max(1, min(int(page or 1), total_pages))
+
+    return {
+        "items": normalized_items,
+        "page": current_page,
+        "pageSize": safe_page_size,
+        "total": safe_total,
+        "pages": total_pages,
+        "range": range_key,
+        "sort": sort_order,
+        "search": search_value,
+    }
+
+
+def refresh_code_stat_names(*, limit: Optional[int] = None) -> Dict[str, Any]:
+    try:
+        safe_limit = int(limit) if limit is not None else 250
+    except Exception:
+        safe_limit = 250
+    safe_limit = max(1, min(safe_limit, 1000))
+
+    try:
+        updated = refresh_missing_code_names(limit=safe_limit)
+    except Exception as exc:
+        LOGGER.warning("Failed to refresh code part names: %s", exc)
+        raise ControlPanelError("بازخوانی نام قطعه‌ها با خطا مواجه شد.", status=500)
+
+    if updated > 0:
+        _append_audit_event(
+            "بازخوانی نام قطعه‌ها",
+            details=f"{updated} رکورد",
+        )
+
+    return {"updated": int(updated), "limit": safe_limit}
+
+
 def get_commands() -> List[Dict[str, Any]]:
     commands = _load_json_setting(COMMANDS_KEY, DEFAULT_COMMANDS)
     if not isinstance(commands, list):
@@ -680,22 +944,59 @@ def delete_command(command_id: str) -> Dict[str, Any]:
 
 
 def get_blocklist() -> List[Dict[str, Any]]:
-    entries = []
+    entries: List[Dict[str, Any]] = []
     try:
-        for user_id in get_blacklist():
-            entries.append(
-                {
-                    "id": str(user_id),
-                    "userId": int(user_id),
-                    "platform": "telegram",
-                    "phoneOrUser": str(user_id),
-                    "reason": None,
-                    "createdAtISO": None,
-                }
-            )
+        records = get_blacklist_with_meta()
+        if not records:
+            # Fall back to legacy behaviour
+            records = [
+                {"user_id": user_id, "created_at": None}
+                for user_id in get_blacklist()
+            ]
     except Exception as exc:
-        LOGGER.warning("Failed to fetch blocklist: %s", exc)
+        LOGGER.warning("Failed to fetch blocklist metadata: %s", exc)
         raise ControlPanelError("دریافت لیست مسدود امکان‌پذیر نبود.", status=500)
+
+    meta = _load_blocklist_meta()
+    changed = False
+    seen_keys = set()
+
+    for record in records:
+        user_id = record.get("user_id")
+        if user_id is None:
+            continue
+        created_iso = record.get("created_at")
+        key = str(user_id)
+        if created_iso in ("", None):
+            created_iso = meta.get(key)
+        else:
+            if meta.get(key) != created_iso:
+                meta[key] = created_iso
+                changed = True
+        if created_iso in ("", None):
+            created_iso = None
+        entries.append(
+            {
+                "id": str(user_id),
+                "userId": int(user_id),
+                "platform": "telegram",
+                "phoneOrUser": str(user_id),
+                "reason": None,
+                "createdAtISO": created_iso,
+            }
+        )
+        seen_keys.add(key)
+
+    # Clean up stale metadata for users no longer present
+    stale = set(meta.keys()) - seen_keys
+    if stale:
+        for key in stale:
+            meta.pop(key, None)
+        changed = True
+
+    if changed:
+        _save_blocklist_meta(meta)
+
     return entries
 
 
@@ -713,6 +1014,20 @@ def add_block_item(payload: Dict[str, Any]) -> Dict[str, Any]:
         LOGGER.warning("Failed to add user %s to blacklist: %s", user_id, exc)
         raise ControlPanelError("افزودن به لیست مسدود با خطا مواجه شد.", status=500)
 
+    created_iso = None
+    try:
+        for record in get_blacklist_with_meta():
+            if record.get("user_id") == user_id:
+                created_iso = record.get("created_at")
+                break
+    except Exception:
+        created_iso = None
+
+    if not created_iso:
+        created_iso = _now_iso()
+
+    _remember_blocklist_timestamp(user_id, created_iso)
+
     _append_audit_event("افزودن به لیست مسدود", details=f"کاربر {user_id}")
     return {
         "id": str(user_id),
@@ -720,7 +1035,7 @@ def add_block_item(payload: Dict[str, Any]) -> Dict[str, Any]:
         "platform": "telegram",
         "phoneOrUser": str(user_id),
         "reason": None,
-        "createdAtISO": _now_iso(),
+        "createdAtISO": created_iso,
     }
 
 
@@ -734,6 +1049,7 @@ def remove_block_item(item_id: str) -> Dict[str, Any]:
     except Exception as exc:
         LOGGER.warning("Failed to remove user %s from blacklist: %s", user_id, exc)
         raise ControlPanelError("حذف از لیست مسدود امکان‌پذیر نبود.", status=500)
+    _forget_blocklist_timestamp(user_id)
     _append_audit_event("حذف از لیست مسدود", details=f"کاربر {user_id}")
     return {"success": True}
 
@@ -755,15 +1071,35 @@ def get_settings() -> Dict[str, Any]:
     }
 
 
-def get_audit_log(limit: int = 50) -> Dict[str, Any]:
-    live_limit = limit if isinstance(limit, int) and limit > 0 else MAX_AUDIT_LOG_ENTRIES
+def get_audit_log(*, page: int = 1, page_size: int = 20) -> Dict[str, Any]:
     try:
-        entries, total = fetch_audit_log_entries(live_limit)
-        if limit > 0 and len(entries) > limit:
-            entries = entries[:limit]
+        page_int = int(page)
+    except Exception:
+        page_int = 1
+    if page_int <= 0:
+        page_int = 1
+
+    try:
+        size_int = int(page_size)
+    except Exception:
+        size_int = 50
+    size_int = max(1, min(size_int, 200))
+
+    offset = (page_int - 1) * size_int
+
+    try:
+        entries, total = fetch_audit_log_entries(limit=size_int, offset=offset)
+        total_pages = max(1, (total + size_int - 1) // size_int) if total else 1
+        if page_int > total_pages:
+            page_int = total_pages
+            offset = (page_int - 1) * size_int
+            entries, total = fetch_audit_log_entries(limit=size_int, offset=offset)
         return {
             "items": entries,
             "total": total,
+            "page": page_int,
+            "pageSize": size_int,
+            "pages": max(1, (total + size_int - 1) // size_int) if total else 1,
             "dataSource": "live",
         }
     except Exception:
@@ -771,11 +1107,18 @@ def get_audit_log(limit: int = 50) -> Dict[str, Any]:
 
     entries = _load_audit_log_fallback()
     total = len(entries)
-    if limit > 0:
-        entries = entries[:limit]
+    total_pages = max(1, (total + size_int - 1) // size_int)
+    if page_int > total_pages:
+        page_int = total_pages
+    start = max(0, (page_int - 1) * size_int)
+    end = start + size_int
+    sliced = entries[start:end]
     return {
-        "items": entries,
+        "items": sliced,
         "total": total,
+        "page": page_int,
+        "pageSize": size_int,
+        "pages": total_pages,
         "dataSource": "fallback",
     }
 
@@ -880,6 +1223,203 @@ def update_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     return get_settings()
 
 
+def get_private_telegram_settings() -> Dict[str, Any]:
+    snapshot = _snapshot_private_settings()
+    delivery = snapshot.get("delivery_info") or {}
+
+    def _extract_range(key: str) -> Dict[str, str]:
+        data = snapshot.get(key) or {}
+        if isinstance(data, dict):
+            return {
+                "start": str(data.get("start") or ""),
+                "end": str(data.get("end") or ""),
+            }
+        return {"start": "", "end": ""}
+
+    def _as_int_list(values: Any) -> List[int]:
+        try:
+            return [int(str(item).strip()) for item in (values or []) if str(item).strip()]
+        except Exception:
+            return []
+
+    return {
+        "enabled": bool(snapshot.get("enabled", True)),
+        "dmEnabled": bool(snapshot.get("dm_enabled", snapshot.get("dmEnabled", True))),
+        "apiId": snapshot.get("api_id"),
+        "apiHash": snapshot.get("api_hash", ""),
+        "phoneNumber": snapshot.get("phone_number", ""),
+        "dataSource": snapshot.get("data_source", "sql"),
+        "excelFile": snapshot.get("excel_file", ""),
+        "cacheDurationMinutes": int(snapshot.get("cache_duration_minutes") or 0),
+        "mainGroupId": snapshot.get("main_group_id"),
+        "newGroupId": snapshot.get("new_group_id"),
+        "adminGroupIds": _as_int_list(snapshot.get("admin_group_ids")),
+        "secondaryGroupIds": _as_int_list(snapshot.get("secondary_group_ids")),
+        "workingHours": _extract_range("working_hours"),
+        "thursdayHours": _extract_range("thursday_hours"),
+        "disableFriday": bool(snapshot.get("disable_friday", False)),
+        "lunchBreak": _extract_range("lunch_break"),
+        "queryLimit": snapshot.get("query_limit"),
+        "deliveryInfo": {
+            "before15": str(delivery.get("before_15") or ""),
+            "after15": str(delivery.get("after_15") or ""),
+        },
+        "changeoverHour": str(snapshot.get("changeover_hour") or ""),
+        "blacklist": _as_int_list(snapshot.get("blacklist")),
+        "dataSourceOrigin": "json",
+    }
+
+
+def update_private_telegram_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ControlPanelError("ساختار تنظیمات نامعتبر است.")
+
+    settings_ref = _ensure_private_settings()
+    changes: List[str] = []
+
+    def _set_field(key: str, value: Any, label: str) -> None:
+        settings_ref[key] = value
+        changes.append(label)
+
+    if "enabled" in payload:
+        _set_field("enabled", bool(payload.get("enabled")), "وضعیت ربات خصوصی")
+
+    if "dmEnabled" in payload:
+        _set_field("dm_enabled", bool(payload.get("dmEnabled")), "پاسخ خصوصی")
+
+    if "apiId" in payload:
+        try:
+            api_id = int(str(payload.get("apiId")).strip())
+        except Exception:
+            raise ControlPanelError("API ID باید عددی باشد.")
+        if api_id <= 0:
+            raise ControlPanelError("API ID باید بزرگ‌تر از صفر باشد.")
+        _set_field("api_id", api_id, "API ID")
+
+    if "apiHash" in payload:
+        api_hash = str(payload.get("apiHash") or "").strip()
+        if not api_hash:
+            raise ControlPanelError("API Hash نمی‌تواند خالی باشد.")
+        _set_field("api_hash", api_hash, "API Hash")
+
+    if "phoneNumber" in payload:
+        phone = str(payload.get("phoneNumber") or "").strip()
+        if not phone:
+            raise ControlPanelError("شماره تلفن نمی‌تواند خالی باشد.")
+        _set_field("phone_number", phone, "شماره تماس")
+
+    if "dataSource" in payload:
+        source = str(payload.get("dataSource") or "").strip().lower() or "sql"
+        if source not in {"sql", "excel"}:
+            raise ControlPanelError("منبع داده نامعتبر است. فقط sql یا excel مجاز است.")
+        _set_field("data_source", source, "منبع داده")
+
+    if "excelFile" in payload:
+        excel_file = str(payload.get("excelFile") or "").strip()
+        _set_field("excel_file", excel_file, "فایل اکسل")
+
+    if "cacheDurationMinutes" in payload:
+        try:
+            cache_minutes = int(str(payload.get("cacheDurationMinutes", 0)).strip() or 0)
+        except Exception:
+            raise ControlPanelError("مدت کش باید عددی باشد.")
+        if cache_minutes < 0:
+            raise ControlPanelError("مدت کش نمی‌تواند منفی باشد.")
+        _set_field("cache_duration_minutes", cache_minutes, "مدت کش")
+
+    if "mainGroupId" in payload:
+        try:
+            main_group = int(str(payload.get("mainGroupId")).strip())
+        except Exception:
+            raise ControlPanelError("شناسه گروه اصلی نامعتبر است.")
+        _set_field("main_group_id", main_group, "گروه اصلی")
+
+    if "newGroupId" in payload:
+        try:
+            new_group = int(str(payload.get("newGroupId")).strip())
+        except Exception:
+            raise ControlPanelError("شناسه گروه جدید نامعتبر است.")
+        _set_field("new_group_id", new_group, "گروه جدید")
+
+    if "adminGroupIds" in payload:
+        admin_groups = _normalize_group_list(payload.get("adminGroupIds"), "گروه‌های مدیریت")
+        _set_field("admin_group_ids", admin_groups, "گروه‌های مدیریت")
+
+    if "secondaryGroupIds" in payload:
+        secondary_groups = _normalize_group_list(
+            payload.get("secondaryGroupIds"), "گروه‌های فرعی"
+        )
+        _set_field("secondary_group_ids", secondary_groups, "گروه‌های فرعی")
+
+    if "workingHours" in payload:
+        working = _normalize_time_range(
+            payload.get("workingHours"), "شروع ساعات کاری", "پایان ساعات کاری"
+        )
+        _set_field("working_hours", working, "ساعات کاری")
+
+    if "thursdayHours" in payload:
+        thursday = _normalize_time_range(
+            payload.get("thursdayHours"), "شروع پنج‌شنبه", "پایان پنج‌شنبه"
+        )
+        _set_field("thursday_hours", thursday, "ساعات پنج‌شنبه")
+
+    if "disableFriday" in payload:
+        _set_field("disable_friday", bool(payload.get("disableFriday")), "وضعیت جمعه")
+
+    if "lunchBreak" in payload:
+        lunch = _normalize_time_range(
+            payload.get("lunchBreak"), "شروع ناهار", "پایان ناهار"
+        )
+        _set_field("lunch_break", lunch, "استراحت ناهار")
+
+    if "queryLimit" in payload:
+        limit_value = payload.get("queryLimit")
+        if limit_value in (None, ""):
+            if "query_limit" in settings_ref:
+                del settings_ref["query_limit"]
+                changes.append("محدودیت استعلام")
+        else:
+            try:
+                limit_int = int(str(limit_value).strip())
+            except Exception:
+                raise ControlPanelError("محدودیت استعلام باید عددی باشد.")
+            if limit_int < 0:
+                raise ControlPanelError("محدودیت استعلام نمی‌تواند منفی باشد.")
+            _set_field("query_limit", limit_int, "محدودیت استعلام")
+
+    if "deliveryInfo" in payload:
+        delivery_payload = payload.get("deliveryInfo") or {}
+        if not isinstance(delivery_payload, dict):
+            raise ControlPanelError("ساختار متن تحویل نامعتبر است.")
+        delivery = settings_ref.setdefault("delivery_info", {})
+        delivery["before_15"] = str(delivery_payload.get("before15") or "").strip()
+        delivery["after_15"] = str(delivery_payload.get("after15") or "").strip()
+        changes.append("پیام تحویل")
+
+    if "changeoverHour" in payload:
+        changeover = _normalize_time(payload.get("changeoverHour"), "ساعت تغییر متن")
+        _set_field("changeover_hour", changeover, "ساعت تغییر متن")
+
+    if "blacklist" in payload:
+        blacklist = _normalize_group_list(payload.get("blacklist"), "لیست سیاه")
+        _set_field("blacklist", blacklist, "لیست سیاه خصوصی")
+
+    try:
+        _private_save_settings()
+    except Exception as exc:  # pragma: no cover - file I/O safety
+        LOGGER.error("Failed to persist private Telegram settings: %s", exc)
+        raise ControlPanelError("ذخیره تنظیمات تلگرام خصوصی امکان‌پذیر نبود.", status=500)
+
+    if changes:
+        summary = "، ".join(sorted(set(changes)))
+        _append_audit_event(
+            "به‌روزرسانی تنظیمات تلگرام خصوصی",
+            details=summary,
+        )
+
+    return get_private_telegram_settings()
+
+
 def toggle_bot(active: bool) -> Dict[str, Any]:
     set_setting("enabled", "true" if active else "false")
     try:
@@ -910,6 +1450,17 @@ def invalidate_cache() -> Dict[str, Any]:
     except Exception as exc:
         LOGGER.warning("Failed to refresh inventory cache: %s", exc)
         raise ControlPanelError("به‌روزرسانی کش با خطا مواجه شد.", status=500)
+
+    if _private_refresh_cache:
+        try:
+            updated = _private_refresh_cache()
+            if not updated:
+                LOGGER.info("Private Telegram cache refresh returned no data.")
+        except Exception as exc:
+            LOGGER.warning("Failed to refresh private Telegram cache: %s", exc)
+            raise ControlPanelError(
+                "به‌روزرسانی کش تلگرام خصوصی با خطا مواجه شد.", status=500
+            )
 
     timestamp = _now_iso()
     set_setting(CACHE_KEY, timestamp)
