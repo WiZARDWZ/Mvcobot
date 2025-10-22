@@ -3,6 +3,7 @@ import {
   createElement,
   createLoadingState,
   createTable,
+  debounce,
   renderToast,
 } from './components.js';
 
@@ -53,13 +54,35 @@ export async function mount(container) {
   });
   sortWrapper.appendChild(sortSelect);
 
+  const searchWrapper = createElement('label', { classes: ['filter-bar__group'] });
+  const searchLabel = createElement('span', { classes: ['filter-bar__label'], text: 'جستجوی کد' });
+  const searchInput = createElement('input', {
+    classes: ['filter-bar__input'],
+    attrs: {
+      type: 'text',
+      placeholder: 'مثال: 12345-67890',
+      inputmode: 'text',
+      autocomplete: 'off',
+    },
+  });
+  searchWrapper.append(searchLabel, searchInput);
+
   const applyButton = createElement('button', {
     classes: ['btn', 'btn--primary'],
     attrs: { type: 'button' },
     text: 'اعمال فیلتر',
   });
 
-  filterBar.append(rangeWrapper, sortWrapper, applyButton);
+  const refreshButton = createElement('button', {
+    classes: ['btn', 'btn--ghost'],
+    attrs: { type: 'button' },
+    text: 'بازخوانی نام قطعه‌ها',
+  });
+
+  const actionsWrapper = createElement('div', { classes: ['filter-bar__actions'] });
+  actionsWrapper.append(refreshButton, applyButton);
+
+  filterBar.append(rangeWrapper, sortWrapper, searchWrapper, actionsWrapper);
 
   const table = createTable(
     [
@@ -103,6 +126,7 @@ export async function mount(container) {
   let totalPages = 1;
   let totalItems = 0;
   let isLoading = false;
+  let isRefreshingNames = false;
 
   rangeSelect.value = '1m';
   sortSelect.value = 'desc';
@@ -112,24 +136,30 @@ export async function mount(container) {
     prevButton.disabled = isLoading || currentPage <= 1;
     nextButton.disabled = isLoading || currentPage >= totalPages;
     pagination.hidden = totalItems <= pageSize;
+    applyButton.disabled = isLoading;
+    refreshButton.disabled = isLoading || isRefreshingNames;
   }
 
   async function loadStats({ page = currentPage, toast = false } = {}) {
     isLoading = true;
     loadingState.hidden = false;
     updatePagination();
+    const searchTerm = searchInput.value.trim();
+    let succeeded = false;
     try {
       const response = await api.getCodeStats({
         range: rangeSelect.value,
         sort: sortSelect.value,
         page,
         pageSize,
+        search: searchTerm,
       });
       const items = response?.items ?? [];
       currentPage = response?.page ?? page;
       totalItems = response?.total ?? items.length;
       totalPages = response?.pages ?? Math.max(1, Math.ceil(totalItems / pageSize));
       table.update(items);
+      succeeded = true;
       if (toast) {
         renderToast({ message: 'آمار کدها به‌روزرسانی شد.' });
       }
@@ -144,6 +174,7 @@ export async function mount(container) {
       loadingState.hidden = true;
       updatePagination();
     }
+    return succeeded;
   }
 
   function handlePrev() {
@@ -164,11 +195,54 @@ export async function mount(container) {
     loadStats({ page: 1, toast: true });
   }
 
+  const onSearchInput = debounce(() => {
+    if (isLoading) return;
+    currentPage = 1;
+    loadStats({ page: 1 });
+  }, 350);
+
+  function handleSearchKeyDown(event) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      applyFilters();
+    }
+  }
+
+  async function handleRefreshNames() {
+    if (isRefreshingNames || isLoading) {
+      return;
+    }
+    isRefreshingNames = true;
+    updatePagination();
+    try {
+      const response = await api.refreshCodeNames();
+      currentPage = 1;
+      const refreshed = await loadStats({ page: 1 });
+      if (refreshed) {
+        const updatedCount = Number(response?.updated ?? 0);
+        const message =
+          updatedCount > 0
+            ? `${updatedCount.toLocaleString('fa-IR')} نام قطعه به‌روزرسانی شد.`
+            : 'نام تازه‌ای برای بروزرسانی یافت نشد.';
+        renderToast({ message, type: updatedCount > 0 ? 'success' : 'warning' });
+      }
+    } catch (error) {
+      console.error('Failed to refresh code names', error);
+      renderToast({ message: 'بازخوانی نام قطعه‌ها ناموفق بود.', type: 'error' });
+    } finally {
+      isRefreshingNames = false;
+      updatePagination();
+    }
+  }
+
   prevButton.addEventListener('click', handlePrev);
   nextButton.addEventListener('click', handleNext);
   rangeSelect.addEventListener('change', applyFilters);
   sortSelect.addEventListener('change', applyFilters);
   applyButton.addEventListener('click', applyFilters);
+  searchInput.addEventListener('input', onSearchInput);
+  searchInput.addEventListener('keydown', handleSearchKeyDown);
+  refreshButton.addEventListener('click', handleRefreshNames);
 
   await loadStats();
 
@@ -183,6 +257,9 @@ export async function mount(container) {
       rangeSelect.removeEventListener('change', applyFilters);
       sortSelect.removeEventListener('change', applyFilters);
       applyButton.removeEventListener('click', applyFilters);
+      searchInput.removeEventListener('input', onSearchInput);
+      searchInput.removeEventListener('keydown', handleSearchKeyDown);
+      refreshButton.removeEventListener('click', handleRefreshNames);
     },
   };
 }

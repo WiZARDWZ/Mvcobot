@@ -81,7 +81,7 @@ const codeStatsBase = Array.from({ length: 60 }, (_, index) => {
   return { code, partName, baseCount };
 });
 
-function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize }) {
+function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize, searchTerm = '' }) {
   const factors = {
     '1m': 0.65,
     '2m': 0.8,
@@ -100,7 +100,20 @@ function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize }) {
     return { code: item.code, partName: item.partName, requestCount };
   });
 
-  enriched.sort((a, b) => {
+  const searchValue = (searchTerm || '').trim().toUpperCase();
+  let working = enriched.slice();
+  if (searchValue) {
+    const normalizedSearch = searchValue.replace(/[^A-Z0-9]/g, '');
+    working = working.filter((item) => {
+      const normalizedCode = item.code.replace(/-/g, '');
+      if (normalizedSearch && normalizedCode.includes(normalizedSearch)) {
+        return true;
+      }
+      return item.code.toUpperCase().includes(searchValue);
+    });
+  }
+
+  working.sort((a, b) => {
     if (a.requestCount === b.requestCount) {
       return a.code.localeCompare(b.code, 'fa');
     }
@@ -109,12 +122,12 @@ function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize }) {
       : b.requestCount - a.requestCount;
   });
 
-  const total = enriched.length;
+  const total = working.length;
   const safePageSize = Math.max(1, pageSize);
   const pages = Math.max(1, Math.ceil(total / safePageSize));
   const safePage = Math.min(Math.max(1, page), pages);
   const startIndex = (safePage - 1) * safePageSize;
-  const items = enriched.slice(startIndex, startIndex + safePageSize);
+  const items = working.slice(startIndex, startIndex + safePageSize);
 
   return {
     items,
@@ -409,13 +422,16 @@ export const api = {
     return result;
   },
 
-  async getCodeStats({ range = '1m', sort = 'desc', page = 1, pageSize = 20 } = {}) {
+  async getCodeStats({ range = '1m', sort = 'desc', page = 1, pageSize = 20, search = '' } = {}) {
     const params = new URLSearchParams({
       range,
       sort,
       page: String(page),
       pageSize: String(pageSize),
     });
+    if (search && search.trim()) {
+      params.set('search', search.trim());
+    }
 
     const mockHandler = () => {
       const snapshot = buildMockCodeStats({
@@ -423,6 +439,7 @@ export const api = {
         sortOrder: sort,
         page,
         pageSize,
+        searchTerm: search,
       });
       return {
         items: snapshot.items.map((item) => ({
@@ -436,12 +453,40 @@ export const api = {
         pages: snapshot.pages,
         range,
         sort,
+        search,
       };
     };
 
     return runWithFallback(
       'getCodeStats',
       () => request(`/api/v1/code-stats?${params.toString()}`),
+      mockHandler
+    );
+  },
+
+  async refreshCodeNames({ limit } = {}) {
+    const payload = {};
+    if (typeof limit !== 'undefined' && limit !== null) {
+      const numericLimit = Number(limit);
+      if (!Number.isNaN(numericLimit)) {
+        payload.limit = numericLimit;
+      }
+    }
+
+    const mockHandler = async () => {
+      await delay(180);
+      return { updated: 0, limit: payload.limit ?? null };
+    };
+
+    const body = Object.keys(payload).length ? payload : {};
+
+    return runWithFallback(
+      'refreshCodeNames',
+      () =>
+        request('/api/v1/code-stats/refresh-names', {
+          method: 'POST',
+          body,
+        }),
       mockHandler
     );
   },

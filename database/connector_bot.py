@@ -4,6 +4,9 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pyodbc
 from config import BOT_DB_CONFIG, DB_CONFIG
+from utils.code_standardization import format_display_code, normalize_code
+
+_SPAM_GUARD_WINDOW_SECONDS = 2
 
 # def get_connection():
 #     conn_str = (
@@ -414,15 +417,75 @@ def record_code_request(
     if timestamp.tzinfo is not None:
         timestamp = timestamp.astimezone(timezone.utc).replace(tzinfo=None)
 
+    guard_seconds = int(max(1, _SPAM_GUARD_WINDOW_SECONDS))
     query = """
-        INSERT INTO platform_code_log (platform, code_norm, code_display, part_name, requested_at)
-        VALUES (?, ?, ?, ?, ?)
+        DECLARE @now DATETIME2 = ?;
+        DECLARE @platform NVARCHAR(50) = ?;
+        DECLARE @code_norm NVARCHAR(10) = ?;
+        DECLARE @code_display NVARCHAR(11) = ?;
+        DECLARE @part_name NVARCHAR(255) = ?;
+        DECLARE @guard_seconds INT = ?;
+
+        IF NOT EXISTS (
+            SELECT 1
+            FROM platform_code_log
+            WHERE platform = @platform
+              AND code_norm = @code_norm
+              AND requested_at >= DATEADD(SECOND, -@guard_seconds, @now)
+        )
+        BEGIN
+            INSERT INTO platform_code_log (platform, code_norm, code_display, part_name, requested_at)
+            VALUES (@platform, @code_norm, @code_display, @part_name, @now);
+        END
+        ELSE IF (
+            @part_name IS NOT NULL
+            AND LTRIM(RTRIM(@part_name)) <> ''
+            AND @part_name <> '-'
+        )
+        BEGIN
+            UPDATE platform_code_log
+            SET part_name = @part_name
+            WHERE id IN (
+                SELECT TOP (1) id
+                FROM platform_code_log
+                WHERE platform = @platform
+                  AND code_norm = @code_norm
+                  AND (
+                      part_name IS NULL
+                      OR part_name = '-'
+                      OR LTRIM(RTRIM(part_name)) = ''
+                  )
+                ORDER BY requested_at DESC, id DESC
+            );
+        END
     """
 
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute(query, platform_value, norm_value, display_value, name_value, timestamp)
+        cur.execute(
+            query,
+            timestamp,
+            platform_value,
+            norm_value,
+            display_value,
+            name_value,
+            guard_seconds,
+        )
         conn.commit()
+
+
+def _prepare_search_filter(search: Optional[str]) -> Optional[Tuple[str, str]]:
+    if search in (None, ""):
+        return None
+    normalized = normalize_code(str(search))
+    if len(normalized) < 7:
+        return None
+    if len(normalized) >= 10:
+        padded = normalized[:10]
+    else:
+        padded = normalized + ("X" * (10 - len(normalized)))
+    display = format_display_code(padded)
+    return padded, display
 
 
 def _resolve_code_range(range_key: str) -> Optional[datetime]:
@@ -451,6 +514,7 @@ def fetch_code_statistics(
     sort_order: str,
     page: int,
     page_size: int,
+    search: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], int]:
     if not ensure_control_panel_tables():
         raise RuntimeError("control panel tables are unavailable")
@@ -461,11 +525,20 @@ def fetch_code_statistics(
     order = "ASC" if (sort_order or "").lower().startswith("a") else "DESC"
     start = _resolve_code_range(range_key)
 
-    where_clause = ""
     params: List[Any] = []
+    filters: List[str] = []
     if start is not None:
-        where_clause = "WHERE requested_at >= ?"
+        filters.append("requested_at >= ?")
         params.append(start)
+
+    search_filter = _prepare_search_filter(search)
+    if search_filter:
+        filters.append("(code_norm = ? OR code_display = ?)")
+        params.extend(search_filter)
+
+    where_clause = ""
+    if filters:
+        where_clause = "WHERE " + " AND ".join(filters)
 
     count_query = f"""
         WITH filtered AS (
@@ -579,6 +652,78 @@ def fetch_code_statistics(
         )
 
     return items, total
+
+
+def refresh_missing_code_names(limit: int = 250) -> int:
+    if not ensure_control_panel_tables():
+        raise RuntimeError("control panel tables are unavailable")
+
+    try:
+        safe_limit = int(limit)
+    except Exception:
+        safe_limit = 250
+    safe_limit = max(1, min(safe_limit, 1000))
+
+    missing_query = """
+        WITH missing AS (
+            SELECT
+                code_norm,
+                code_display,
+                MAX(requested_at) AS last_requested_at
+            FROM platform_code_log
+            WHERE part_name IS NULL
+               OR LTRIM(RTRIM(part_name)) = ''
+               OR part_name = '-'
+            GROUP BY code_norm, code_display
+        )
+        SELECT TOP (?) code_norm, code_display
+        FROM missing
+        ORDER BY last_requested_at DESC
+    """
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        rows = cur.execute(missing_query, safe_limit).fetchall()
+
+    if not rows:
+        return 0
+
+    pairs: List[Tuple[str, str]] = []
+    for row in rows:
+        norm_value = (row[0] or "").strip().upper()
+        display_value = (row[1] or "").strip().upper()
+        if not norm_value:
+            continue
+        pairs.append((norm_value, display_value))
+
+    replacements = _fetch_part_names_from_inventory(pairs)
+    if not replacements:
+        return 0
+
+    updated_rows = 0
+    update_query = """
+        UPDATE platform_code_log
+        SET part_name = ?
+        WHERE code_norm = ?
+          AND (
+              part_name IS NULL
+              OR part_name = '-'
+              OR LTRIM(RTRIM(part_name)) = ''
+          )
+    """
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        for norm_value, display_value in pairs:
+            key = norm_value or display_value.replace("-", "")
+            part_name = replacements.get(key)
+            if not part_name or part_name == "-":
+                continue
+            cur.execute(update_query, part_name, norm_value)
+            updated_rows += cur.rowcount or 0
+        conn.commit()
+
+    return int(updated_rows)
 
 
 def _serialize_details(details: Any) -> Optional[str]:

@@ -18,6 +18,7 @@ from database.connector_bot import (
     get_blacklist_with_meta,
     get_connection,
     get_setting,
+    refresh_missing_code_names,
     record_audit_event,
     remove_from_blacklist,
     save_working_hours_entries,
@@ -802,13 +803,16 @@ def get_code_statistics(
     sort_order: str,
     page: int,
     page_size: int,
+    search: Optional[str] = None,
 ) -> Dict[str, Any]:
+    search_value = (search or "").strip()
     try:
         items, total = fetch_code_statistics(
             range_key=range_key,
             sort_order=sort_order,
             page=page,
             page_size=page_size,
+            search=search_value or None,
         )
     except Exception as exc:
         LOGGER.warning("Failed to fetch code statistics: %s", exc)
@@ -840,7 +844,30 @@ def get_code_statistics(
         "pages": total_pages,
         "range": range_key,
         "sort": sort_order,
+        "search": search_value,
     }
+
+
+def refresh_code_stat_names(*, limit: Optional[int] = None) -> Dict[str, Any]:
+    try:
+        safe_limit = int(limit) if limit is not None else 250
+    except Exception:
+        safe_limit = 250
+    safe_limit = max(1, min(safe_limit, 1000))
+
+    try:
+        updated = refresh_missing_code_names(limit=safe_limit)
+    except Exception as exc:
+        LOGGER.warning("Failed to refresh code part names: %s", exc)
+        raise ControlPanelError("بازخوانی نام قطعه‌ها با خطا مواجه شد.", status=500)
+
+    if updated > 0:
+        _append_audit_event(
+            "بازخوانی نام قطعه‌ها",
+            details=f"{updated} رکورد",
+        )
+
+    return {"updated": int(updated), "limit": safe_limit}
 
 
 def get_commands() -> List[Dict[str, Any]]:

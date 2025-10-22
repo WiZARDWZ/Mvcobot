@@ -855,6 +855,11 @@ tbody tr:nth-of-type(odd) {
   color: var(--color-text-muted);
 }
 
+.filter-bar__label {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
 .filter-bar__select {
   min-width: 10rem;
   padding: 0.4rem 0.6rem;
@@ -862,6 +867,29 @@ tbody tr:nth-of-type(odd) {
   border: 1px solid var(--color-border);
   background-color: var(--color-surface);
   color: var(--color-text);
+}
+
+.filter-bar__input {
+  min-width: 12rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  transition: border-color var(--transition-base), box-shadow var(--transition-base);
+}
+
+.filter-bar__input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25);
+}
+
+.filter-bar__actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
 }
 
 .filter-bar .btn {

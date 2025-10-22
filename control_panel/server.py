@@ -111,6 +111,16 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
             self._handle_api(lambda: (HTTPStatus.OK, logic.toggle_bot(active)))
         elif path == "/api/v1/cache/invalidate":
             self._handle_api(lambda: (HTTPStatus.OK, logic.invalidate_cache()))
+        elif path == "/api/v1/code-stats/refresh-names":
+            limit_value = None
+            if isinstance(body, dict):
+                limit_value = body.get("limit")
+            self._handle_api(
+                lambda: (
+                    HTTPStatus.OK,
+                    logic.refresh_code_stat_names(limit=limit_value),
+                )
+            )
         else:
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint not found")
 
@@ -194,6 +204,7 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
             page_size = self._parse_positive_int(query.get("pageSize", ["20"]), 20)
             range_key = (query.get("range") or ["1m"])[0]
             sort_order = (query.get("sort") or ["desc"])[0]
+            search_value = (query.get("search") or [""])[0]
             self._handle_api(
                 lambda: (
                     HTTPStatus.OK,
@@ -202,6 +213,7 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
                         sort_order=sort_order,
                         page=page,
                         page_size=page_size,
+                        search=search_value,
                     ),
                 )
             )

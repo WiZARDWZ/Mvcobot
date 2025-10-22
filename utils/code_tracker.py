@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
-from typing import Optional
+from threading import Lock
+from typing import Dict, Optional, Tuple
 
 from .code_standardization import StandardizedCode, standardize_code
 
@@ -16,6 +18,11 @@ except Exception:  # pragma: no cover - fallback when connector is unavailable
     record_code_request = None  # type: ignore[assignment]
 
 
+_RECENT_LOOKUPS: Dict[Tuple[str, str], Tuple[float, str]] = {}
+_RECENT_LOCK = Lock()
+_SPAM_WINDOW_SECONDS = 1.0
+
+
 def _prepare_timestamp(ts: Optional[datetime]) -> datetime:
     if ts is None:
         ts = datetime.utcnow().replace(tzinfo=timezone.utc)
@@ -24,6 +31,33 @@ def _prepare_timestamp(ts: Optional[datetime]) -> datetime:
     else:
         ts = ts.astimezone(timezone.utc)
     return ts.replace(tzinfo=None)
+
+
+def _should_skip_lookup(platform: str, code: StandardizedCode, part_name: str) -> bool:
+    """Return True if the lookup should be ignored due to rapid repetition."""
+
+    key = (platform.lower(), code.padded)
+    now = time.monotonic()
+    clean_name = part_name.strip()
+
+    with _RECENT_LOCK:
+        entry = _RECENT_LOOKUPS.get(key)
+        if entry is not None:
+            last_ts, last_name = entry
+            if now - last_ts < _SPAM_WINDOW_SECONDS:
+                if clean_name and clean_name not in {"-", ""} and last_name in {"-", ""}:
+                    _RECENT_LOOKUPS[key] = (now, clean_name)
+                    return False
+                return True
+
+        _RECENT_LOOKUPS[key] = (now, clean_name or "-")
+
+        if len(_RECENT_LOOKUPS) > 2048:
+            stale_keys = [k for k, (ts, _) in _RECENT_LOOKUPS.items() if now - ts >= _SPAM_WINDOW_SECONDS]
+            for stale_key in stale_keys:
+                _RECENT_LOOKUPS.pop(stale_key, None)
+
+    return False
 
 
 def record_code_lookup(
@@ -39,6 +73,10 @@ def record_code_lookup(
 
     platform_name = (platform or "unknown").strip() or "unknown"
     name_value = (part_name or "-").strip() or "-"
+
+    if _should_skip_lookup(platform_name, code, name_value):
+        return
+
     timestamp = _prepare_timestamp(requested_at)
 
     try:
