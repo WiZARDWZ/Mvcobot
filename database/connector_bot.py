@@ -381,7 +381,12 @@ def fetch_code_statistics(
                 WHERE f.code_norm = a.code_norm
                   AND f.code_display = a.code_display
                 ORDER BY
-                    CASE WHEN f.part_name IS NOT NULL AND LTRIM(RTRIM(f.part_name)) <> '' AND f.part_name <> '-' THEN 0 ELSE 1 END,
+                    CASE
+                        WHEN f.part_name IS NOT NULL
+                             AND LTRIM(RTRIM(f.part_name)) <> ''
+                             AND f.part_name <> '-' THEN 0
+                        ELSE 1
+                    END,
                     f.requested_at DESC
             ) AS latest
         )
