@@ -3,7 +3,7 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pyodbc
-from config import BOT_DB_CONFIG
+from config import BOT_DB_CONFIG, DB_CONFIG
 
 # def get_connection():
 #     conn_str = (
@@ -35,6 +35,133 @@ def get_connection():
         f"PWD={BOT_DB_CONFIG['password']};"
     )
     return pyodbc.connect(conn_str, timeout=30)
+
+
+def _open_inventory_connection() -> pyodbc.Connection:
+    cfg = DB_CONFIG
+    conn_str = (
+        f"DRIVER={cfg['driver']};"
+        f"SERVER={cfg['server']};"
+        f"DATABASE={cfg['database']};"
+        f"UID={cfg['user']};"
+        f"PWD={cfg['password']};"
+        "Encrypt=yes;TrustServerCertificate=yes;"
+    )
+    return pyodbc.connect(conn_str, timeout=30)
+
+
+def _fetch_part_names_from_inventory(
+    code_pairs: Iterable[Tuple[str, str]]
+) -> Dict[str, str]:
+    """Return part-name mapping for the provided codes without stock filters.
+
+    ``code_pairs`` must contain tuples of ``(code_norm, code_display)``. The
+    query intentionally uses ``LEFT JOIN`` and avoids any ``quantity`` filter so
+    that parts without stock still return their latest title.
+    """
+
+    unique_pairs: List[Tuple[str, str]] = []
+    seen: set[str] = set()
+    for norm, display in code_pairs:
+        norm_value = (norm or "").strip().upper()
+        display_value = (display or "").strip().upper()
+        key = norm_value or display_value.replace("-", "")
+        if not key:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_pairs.append((norm_value, display_value))
+
+    if not unique_pairs:
+        return {}
+
+    selects = " UNION ALL\n            ".join("SELECT ?, ?" for _ in unique_pairs)
+    params: List[str] = []
+    for norm_value, display_value in unique_pairs:
+        params.extend([norm_value, display_value])
+
+    primary_query = f"""
+        DECLARE @FiscalYear INT = (SELECT MAX(FiscalYearId) FROM FMK.FiscalYear);
+
+        WITH requested(code_norm, code_display) AS (
+            {selects}
+        ),
+        items AS (
+            SELECT
+                REPLACE(i.Code, '-', '') AS code_norm,
+                i.Code AS code_display,
+                i.Title AS part_name
+            FROM inv.vwItem AS i
+        ),
+        aggregated AS (
+            SELECT
+                req.code_norm,
+                req.code_display,
+                COALESCE(NULLIF(LTRIM(RTRIM(items.part_name)), ''), '-') AS part_name,
+                MAX(COALESCE(stock.Quantity, 0)) AS quantity
+            FROM requested AS req
+            LEFT JOIN items
+                ON items.code_norm = req.code_norm
+            LEFT JOIN inv.vwItemStockSummary AS stock
+                ON stock.ItemCode = items.code_display
+               AND stock.FiscalYearRef = @FiscalYear
+            GROUP BY
+                req.code_norm,
+                req.code_display,
+                COALESCE(NULLIF(LTRIM(RTRIM(items.part_name)), ''), '-')
+        )
+        SELECT code_norm, code_display, part_name
+        FROM aggregated
+    """
+
+    fallback_query = f"""
+        WITH requested(code_norm, code_display) AS (
+            {selects}
+        ),
+        items AS (
+            SELECT
+                REPLACE(i.Code, '-', '') AS code_norm,
+                i.Code AS code_display,
+                i.Title AS part_name
+            FROM inv.vwItem AS i
+        )
+        SELECT
+            req.code_norm,
+            req.code_display,
+            COALESCE(NULLIF(LTRIM(RTRIM(items.part_name)), ''), '-') AS part_name
+        FROM requested AS req
+        LEFT JOIN items
+            ON items.code_norm = req.code_norm
+    """
+
+    try:
+        with _open_inventory_connection() as conn:
+            cur = conn.cursor()
+            try:
+                rows = cur.execute(primary_query, *params).fetchall()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                rows = cur.execute(fallback_query, *params).fetchall()
+    except Exception:
+        return {}
+
+    result: Dict[str, str] = {}
+    for row in rows:
+        norm_value = (row[0] or "").strip().upper()
+        display_value = (row[1] or "").strip().upper()
+        part_name = (row[2] or "-").strip() or "-"
+        key = norm_value or display_value.replace("-", "")
+        if not key:
+            continue
+        if part_name == "-":
+            continue
+        result[key] = part_name
+
+    return result
 
 
 def _ensure_tables(cur) -> None:
@@ -390,7 +517,7 @@ def fetch_code_statistics(
                     f.requested_at DESC
             ) AS latest
         )
-        SELECT code_display, part_name, request_count
+        SELECT code_display, code_norm, part_name, request_count
         FROM labeled
         ORDER BY request_count {order}, code_display ASC
         OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
@@ -407,14 +534,47 @@ def fetch_code_statistics(
         exec_params.extend([offset, page_size])
         rows = cur.execute(data_query, *exec_params).fetchall()
 
-    items: List[Dict[str, Any]] = []
+    records: List[Dict[str, Any]] = []
     for row in rows:
-        code_display, part_name_value, count_value = row
-        items.append(
+        code_display, code_norm, part_name_value, count_value = row
+        records.append(
             {
                 "code": str(code_display or ""),
+                "norm": str(code_norm or ""),
                 "part_name": (part_name_value or "-") or "-",
                 "request_count": int(count_value or 0),
+            }
+        )
+
+    missing_pairs: List[Tuple[str, str]] = []
+    for item in records:
+        name_value = str(item.get("part_name", "-")).strip()
+        if name_value and name_value != "-":
+            continue
+        norm_value = str(item.get("norm", "")).strip()
+        code_display = str(item.get("code", "")).strip()
+        if not norm_value and not code_display:
+            continue
+        missing_pairs.append((norm_value, code_display))
+
+    replacements = _fetch_part_names_from_inventory(missing_pairs)
+
+    if replacements:
+        for item in records:
+            norm_value = str(item.get("norm", "")).strip().upper()
+            code_display = str(item.get("code", "")).strip().upper()
+            lookup_key = norm_value or code_display.replace("-", "")
+            replacement = replacements.get(lookup_key)
+            if replacement:
+                item["part_name"] = replacement
+
+    items: List[Dict[str, Any]] = []
+    for item in records:
+        items.append(
+            {
+                "code": item["code"],
+                "part_name": item.get("part_name", "-"),
+                "request_count": item.get("request_count", 0),
             }
         )
 
