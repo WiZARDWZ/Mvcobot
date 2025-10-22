@@ -1,5 +1,19 @@
-from cache.updater import get_cached_data
-from utils.formatting import normalize_code
+def _ensure_private_package() -> None:
+    import sys
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+
+try:
+    from privateTelegram.cache.store import get_cached_data
+    from privateTelegram.utils.formatting import normalize_code
+except ModuleNotFoundError:
+    _ensure_private_package()
+    from privateTelegram.cache.store import get_cached_data
+    from privateTelegram.utils.formatting import normalize_code
 
 ORIGINAL_BRANDS = ["MOBIS", "GENUINE"]
 

@@ -2,9 +2,12 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from wa.waweb import WAConfig, WAWebBot
+from utils.code_standardization import standardize_code
+from utils.code_tracker import record_code_lookup
 
 log = logging.getLogger("WA-MANAGER")
 
@@ -174,25 +177,68 @@ class WAController:
             if raw in seen:
                 continue
             seen.add(raw)
+            code_std = standardize_code(raw)
             try:
                 norm = _normalize_code(inv, raw)
                 L = len(norm)
                 if L >= 10:
                     items = _search_full(inv, norm)
                     if items:
+                        if code_std:
+                            record_code_lookup(
+                                "whatsapp",
+                                code_std,
+                                part_name=items[0].get("نام کالا") or items[0].get("name") or None,
+                                requested_at=datetime.utcnow(),
+                            )
                         replies.append(_format_reply_for_item(items[0], delivery))
                     else:
+                        if code_std:
+                            record_code_lookup(
+                                "whatsapp",
+                                code_std,
+                                part_name=None,
+                                requested_at=datetime.utcnow(),
+                            )
                         replies.append(_format_not_found(norm))
                 elif 7 <= L < 10:
                     cands = _search_partial(inv, norm)
                     if cands:
+                        if code_std:
+                            record_code_lookup(
+                                "whatsapp",
+                                code_std,
+                                part_name=cands[0].get("نام کالا") or cands[0].get("name") or None,
+                                requested_at=datetime.utcnow(),
+                            )
                         replies.append(_format_reply_for_item(cands[0], delivery))
                     else:
+                        if code_std:
+                            record_code_lookup(
+                                "whatsapp",
+                                code_std,
+                                part_name=None,
+                                requested_at=datetime.utcnow(),
+                            )
                         replies.append(_format_not_found(norm))
                 else:
+                    if code_std:
+                        record_code_lookup(
+                            "whatsapp",
+                            code_std,
+                            part_name=None,
+                            requested_at=datetime.utcnow(),
+                        )
                     replies.append(_format_not_found(norm))
             except Exception as e:
                 log.warning("WA: on_codes item failed: %s", e)
+                if code_std:
+                    record_code_lookup(
+                        "whatsapp",
+                        code_std,
+                        part_name=None,
+                        requested_at=datetime.utcnow(),
+                    )
                 replies.append(FALLBACK_DB_DOWN)
 
         return replies or [FALLBACK_DB_DOWN]

@@ -404,13 +404,22 @@ export async function mount(container) {
       label: 'واتساپ',
       onChange: (checked) => handlePlatformChange('whatsapp', checked, whatsappToggle.input),
     });
+    const privateToggle = createToggle({
+      id: 'private-telegram-toggle',
+      checked: platforms.privateTelegram ?? true,
+      label: 'تلگرام خصوصی',
+      onChange: (checked) =>
+        handlePlatformChange('privateTelegram', checked, privateToggle.input),
+    });
 
     const telegramRow = createElement('div', { classes: ['status-row__item'] });
     telegramRow.append(createElement('span', { text: 'تلگرام' }), telegramToggle.wrapper);
+    const privateRow = createElement('div', { classes: ['status-row__item'] });
+    privateRow.append(createElement('span', { text: 'تلگرام خصوصی' }), privateToggle.wrapper);
     const whatsappRow = createElement('div', { classes: ['status-row__item'] });
     whatsappRow.append(createElement('span', { text: 'واتساپ' }), whatsappToggle.wrapper);
 
-    platformList.append(telegramRow, whatsappRow);
+    platformList.append(telegramRow, privateRow, whatsappRow);
   }
 
   async function handlePlatformChange(platform, checked, inputEl) {
@@ -422,11 +431,27 @@ export async function mount(container) {
           [platform]: checked,
         },
       });
-      window.APP_CONFIG = {
-        ...(window.APP_CONFIG ?? {}),
-        [`${platform.toUpperCase()}_ENABLED`]: checked,
+      const configKeyMap = {
+        telegram: 'TELEGRAM_ENABLED',
+        whatsapp: 'WHATSAPP_ENABLED',
+        privateTelegram: 'PRIVATE_TELEGRAM_ENABLED',
       };
-      renderToast({ message: `پلتفرم ${platform === 'telegram' ? 'تلگرام' : 'واتساپ'} ${checked ? 'فعال' : 'غیرفعال'} شد.` });
+      const configKey = configKeyMap[platform];
+      if (configKey) {
+        window.APP_CONFIG = {
+          ...(window.APP_CONFIG ?? {}),
+          [configKey]: checked,
+        };
+      }
+      const platformLabels = {
+        telegram: 'تلگرام',
+        whatsapp: 'واتساپ',
+        privateTelegram: 'تلگرام خصوصی',
+      };
+      const platformLabel = platformLabels[platform] ?? platform;
+      renderToast({
+        message: `پلتفرم ${platformLabel} ${checked ? 'فعال' : 'غیرفعال'} شد.`,
+      });
     } catch (error) {
       renderToast({ message: error.message, type: 'error' });
       inputEl.checked = !checked;
