@@ -6,9 +6,36 @@ import os
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from telethon import events
-from telegram.client import client, ADMIN_GROUP_IDS, MAIN_GROUP_ID, NEW_GROUP_ID
-from config.settings import settings, save_settings
-import utils.state as state
+
+
+def _ensure_private_package() -> None:
+    import sys
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parents[2].parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+
+try:
+    from privateTelegram.telegram.client import (
+        client,
+        ADMIN_GROUP_IDS,
+        MAIN_GROUP_ID,
+        NEW_GROUP_ID,
+    )
+    from privateTelegram.config.settings import settings, save_settings
+    from privateTelegram.utils import state
+except ModuleNotFoundError:
+    _ensure_private_package()
+    from privateTelegram.telegram.client import (
+        client,
+        ADMIN_GROUP_IDS,
+        MAIN_GROUP_ID,
+        NEW_GROUP_ID,
+    )
+    from privateTelegram.config.settings import settings, save_settings
+    from privateTelegram.utils import state
 
 TZ = ZoneInfo("Asia/Tehran")
 

@@ -1,5 +1,5 @@
 import json
-from datetime import time
+from datetime import datetime, time, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pyodbc
@@ -92,6 +92,21 @@ def _ensure_tables(cur) -> None:
         WHEN NOT MATCHED THEN
             INSERT (day_of_week, open_time, close_time, is_closed, updated_at)
             VALUES (src.day_of_week, src.open_time, src.close_time, src.is_closed, GETDATE());
+        IF OBJECT_ID('platform_code_log', 'U') IS NULL
+        BEGIN
+            CREATE TABLE platform_code_log (
+                id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                platform NVARCHAR(50) NOT NULL,
+                code_norm NVARCHAR(10) NOT NULL,
+                code_display NVARCHAR(11) NOT NULL,
+                part_name NVARCHAR(255) NULL,
+                requested_at DATETIME2 NOT NULL DEFAULT (SYSUTCDATETIME())
+            );
+            CREATE INDEX IX_platform_code_log_requested_at
+                ON platform_code_log(requested_at);
+            CREATE INDEX IX_platform_code_log_code
+                ON platform_code_log(code_norm, platform);
+        END;
         """
     )
 
@@ -244,6 +259,168 @@ def log_whatsapp_message(chat_identifier: Optional[str], direction: str, text: s
         print("❌ خطا در log_whatsapp_message:", e)
 
 
+def record_code_request(
+    *,
+    platform: str,
+    code_norm: str,
+    code_display: str,
+    part_name: Optional[str],
+    requested_at: datetime,
+) -> None:
+    if not ensure_control_panel_tables():
+        raise RuntimeError("control panel tables are unavailable")
+
+    platform_value = (platform or "unknown").strip() or "unknown"
+    platform_value = platform_value[:50]
+    norm_value = (code_norm or "").strip().upper()[:10]
+    display_value = (code_display or "").strip().upper()[:11]
+    if not norm_value:
+        raise ValueError("code_norm is required")
+    if not display_value:
+        padded = norm_value.ljust(10, "X")[:10]
+        display_value = f"{padded[:5]}-{padded[5:]}"
+
+    name_value = (part_name or "-").strip() or "-"
+    name_value = name_value[:255]
+
+    timestamp = requested_at
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.astimezone(timezone.utc).replace(tzinfo=None)
+
+    query = """
+        INSERT INTO platform_code_log (platform, code_norm, code_display, part_name, requested_at)
+        VALUES (?, ?, ?, ?, ?)
+    """
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(query, platform_value, norm_value, display_value, name_value, timestamp)
+        conn.commit()
+
+
+def _resolve_code_range(range_key: str) -> Optional[datetime]:
+    key = (range_key or "1m").strip().lower()
+    if key in {"all", "کل", "0", "*"}:
+        return None
+
+    mapping = {
+        "1m": 30,
+        "2m": 60,
+        "3m": 90,
+        "6m": 180,
+        "1y": 365,
+    }
+
+    days = mapping.get(key)
+    if days is None:
+        days = mapping["1m"]
+    start = datetime.utcnow() - timedelta(days=days)
+    return start.replace(tzinfo=None)
+
+
+def fetch_code_statistics(
+    *,
+    range_key: str,
+    sort_order: str,
+    page: int,
+    page_size: int,
+) -> Tuple[List[Dict[str, Any]], int]:
+    if not ensure_control_panel_tables():
+        raise RuntimeError("control panel tables are unavailable")
+
+    page = max(1, int(page or 1))
+    page_size = max(1, min(int(page_size or 20), 100))
+    offset = (page - 1) * page_size
+    order = "ASC" if (sort_order or "").lower().startswith("a") else "DESC"
+    start = _resolve_code_range(range_key)
+
+    where_clause = ""
+    params: List[Any] = []
+    if start is not None:
+        where_clause = "WHERE requested_at >= ?"
+        params.append(start)
+
+    count_query = f"""
+        WITH filtered AS (
+            SELECT code_norm, code_display
+            FROM platform_code_log
+            {where_clause}
+        )
+        SELECT COUNT(*)
+        FROM (
+            SELECT code_norm, code_display
+            FROM filtered
+            GROUP BY code_norm, code_display
+        ) AS agg
+    """
+
+    data_query = f"""
+        WITH filtered AS (
+            SELECT platform, code_norm, code_display, part_name, requested_at
+            FROM platform_code_log
+            {where_clause}
+        ),
+        aggregated AS (
+            SELECT
+                code_norm,
+                code_display,
+                COUNT(*) AS request_count
+            FROM filtered
+            GROUP BY code_norm, code_display
+        ),
+        labeled AS (
+            SELECT
+                a.code_norm,
+                a.code_display,
+                a.request_count,
+                COALESCE(NULLIF(latest.part_name, ''), '-') AS part_name
+            FROM aggregated AS a
+            OUTER APPLY (
+                SELECT TOP 1 part_name
+                FROM filtered AS f
+                WHERE f.code_norm = a.code_norm
+                  AND f.code_display = a.code_display
+                ORDER BY
+                    CASE
+                        WHEN f.part_name IS NOT NULL
+                             AND LTRIM(RTRIM(f.part_name)) <> ''
+                             AND f.part_name <> '-' THEN 0
+                        ELSE 1
+                    END,
+                    f.requested_at DESC
+            ) AS latest
+        )
+        SELECT code_display, part_name, request_count
+        FROM labeled
+        ORDER BY request_count {order}, code_display ASC
+        OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+    """
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        if params:
+            total_row = cur.execute(count_query, *params).fetchone()
+        else:
+            total_row = cur.execute(count_query).fetchone()
+        total = int(total_row[0]) if total_row else 0
+        exec_params = list(params)
+        exec_params.extend([offset, page_size])
+        rows = cur.execute(data_query, *exec_params).fetchall()
+
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        code_display, part_name_value, count_value = row
+        items.append(
+            {
+                "code": str(code_display or ""),
+                "part_name": (part_name_value or "-") or "-",
+                "request_count": int(count_value or 0),
+            }
+        )
+
+    return items, total
+
+
 def _serialize_details(details: Any) -> Optional[str]:
     if details is None:
         return None
@@ -273,12 +450,13 @@ def record_audit_event(message: str, *, actor: str = "کنترل‌پنل", deta
         conn.commit()
 
 
-def fetch_audit_log_entries(limit: int = 200) -> Tuple[List[dict], int]:
+def fetch_audit_log_entries(limit: int = 200, offset: int = 0) -> Tuple[List[dict], int]:
     if not ensure_control_panel_tables():
         raise RuntimeError("control panel tables are unavailable")
-    limit = max(1, min(limit, 500))
-    query = f"""
-        SELECT TOP {limit}
+    limit = max(1, min(int(limit or 0), 500))
+    offset = max(0, int(offset or 0))
+    base_query = """
+        SELECT
             id,
             [timestamp],
             actor,
@@ -287,11 +465,32 @@ def fetch_audit_log_entries(limit: int = 200) -> Tuple[List[dict], int]:
         FROM control_panel_audit_log
         ORDER BY [timestamp] DESC, id DESC
     """
+    paginated_query = base_query + " OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
     count_query = "SELECT COUNT(*) FROM control_panel_audit_log"
     entries: List[dict] = []
     with get_connection() as conn:
         cur = conn.cursor()
-        rows = cur.execute(query).fetchall()
+        try:
+            rows = cur.execute(paginated_query, offset, limit).fetchall()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            fetch_size = limit + offset
+            fallback_query = f"""
+                SELECT TOP {fetch_size}
+                    id,
+                    [timestamp],
+                    actor,
+                    message,
+                    details
+                FROM control_panel_audit_log
+                ORDER BY [timestamp] DESC, id DESC
+            """
+            rows = cur.execute(fallback_query).fetchall()
+            if offset:
+                rows = rows[offset:]
         total_row = cur.execute(count_query).fetchone()
     total = int(total_row[0]) if total_row else 0
     for row in rows:
@@ -354,11 +553,27 @@ def add_to_blacklist(user_id):
         uid = int(user_id)
     except:
         return
-    query = "IF NOT EXISTS (SELECT 1 FROM blacklist WHERE user_id=?) INSERT INTO blacklist(user_id) VALUES(?)"
+
+    insert_with_timestamp = (
+        "IF NOT EXISTS (SELECT 1 FROM blacklist WHERE user_id=?) "
+        "INSERT INTO blacklist(user_id, created_at) VALUES(?, GETDATE())"
+    )
+    insert_without_timestamp = (
+        "IF NOT EXISTS (SELECT 1 FROM blacklist WHERE user_id=?) "
+        "INSERT INTO blacklist(user_id) VALUES(?)"
+    )
+
     try:
         with get_connection() as conn:
             cur = conn.cursor()
-            cur.execute(query, uid, uid)
+            try:
+                cur.execute(insert_with_timestamp, uid, uid)
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                cur.execute(insert_without_timestamp, uid, uid)
             conn.commit()
     except Exception as e:
         print("❌ خطا در add_to_blacklist:", e)
@@ -391,16 +606,69 @@ def is_blacklisted(user_id) -> bool:
         print("❌ خطا در is_blacklisted:", e)
         return False
 
-def get_blacklist() -> List[int]:
-    query = "SELECT user_id FROM blacklist"
+def _coerce_iso(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        try:
+            return value.isoformat()
+        except Exception:
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+        return parsed.isoformat()
+    except Exception:
+        return text
+
+
+def get_blacklist_with_meta() -> List[Dict[str, Any]]:
+    query_with_created = (
+        "SELECT user_id, created_at FROM blacklist "
+        "ORDER BY created_at DESC, user_id DESC"
+    )
+    query_without_created = "SELECT user_id FROM blacklist ORDER BY user_id DESC"
+
     try:
         with get_connection() as conn:
             cur = conn.cursor()
-            rows = cur.execute(query).fetchall()
-            return [int(r[0]) for r in rows]
+            try:
+                rows = cur.execute(query_with_created).fetchall()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                rows = cur.execute(query_without_created).fetchall()
+                return [
+                    {"user_id": int(row[0]), "created_at": None}
+                    for row in rows
+                ]
+
+            result: List[Dict[str, Any]] = []
+            for row in rows:
+                user_value = row[0]
+                created_value = row[1] if len(row) > 1 else None
+                try:
+                    user_id = int(user_value)
+                except Exception:
+                    continue
+                result.append(
+                    {
+                        "user_id": user_id,
+                        "created_at": _coerce_iso(created_value),
+                    }
+                )
+            return result
     except Exception as e:
-        print("❌ خطا در get_blacklist:", e)
+        print("❌ خطا در get_blacklist_with_meta:", e)
         return []
+
+
+def get_blacklist() -> List[int]:
+    return [entry["user_id"] for entry in get_blacklist_with_meta()]
 
 def fetch_logs(user_id: int) -> List[dict]:
     """
