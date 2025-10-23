@@ -9,6 +9,7 @@ const defaultConfig = {
   API_KEY: '',
   TELEGRAM_ENABLED: true,
   WHATSAPP_ENABLED: true,
+  PRIVATE_TELEGRAM_ENABLED: true,
 };
 
 const DEFAULT_FALLBACK_MESSAGE =
@@ -49,13 +50,93 @@ function getLastMonths(count = 12) {
 const monthlyData = getLastMonths(12).map(({ month }) => {
   const telegram = Math.floor(seededRandom() * 120 + 30);
   const whatsapp = Math.floor(seededRandom() * 180 + 45);
+  const privateTelegram = Math.floor(seededRandom() * 90 + 20);
   return {
     month,
     telegram,
     whatsapp,
-    all: telegram + whatsapp,
+    privateTelegram,
+    all: telegram + whatsapp + privateTelegram,
   };
 });
+
+const samplePartNames = [
+  'سنسور اکسیژن',
+  'پمپ بنزین',
+  'چراغ جلو',
+  'سوییچ اصلی',
+  'لنت ترمز جلو',
+  'سیبک فرمان',
+  'کمک فنر عقب',
+  'فیلتر هوای موتور',
+  'رادیاتور آب',
+  'میل موجگیر',
+];
+
+const codeStatsBase = Array.from({ length: 60 }, (_, index) => {
+  const raw = `${Math.floor(seededRandom() * 9000000000) + 1000000000}`;
+  const code = `${raw.slice(0, 5)}-${raw.slice(5, 10)}`;
+  const partName = samplePartNames[index % samplePartNames.length];
+  const baseCount = Math.floor(seededRandom() * 180 + 15);
+  return { code, partName, baseCount };
+});
+
+function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize, searchTerm = '' }) {
+  const factors = {
+    '1m': 0.65,
+    '2m': 0.8,
+    '3m': 0.9,
+    '6m': 1,
+    '1y': 1.15,
+    all: 1.3,
+  };
+  const key = (rangeKey || '1m').toLowerCase();
+  const factor = factors[key] ?? factors['1m'];
+  const direction = (sortOrder || 'desc').toLowerCase().startsWith('a') ? 'asc' : 'desc';
+
+  const enriched = codeStatsBase.map((item) => {
+    const jitter = Math.floor(seededRandom() * 12);
+    const requestCount = Math.max(1, Math.round(item.baseCount * factor + jitter));
+    return { code: item.code, partName: item.partName, requestCount };
+  });
+
+  const searchValue = (searchTerm || '').trim().toUpperCase();
+  let working = enriched.slice();
+  if (searchValue) {
+    const normalizedSearch = searchValue.replace(/[^A-Z0-9]/g, '');
+    working = working.filter((item) => {
+      const normalizedCode = item.code.replace(/-/g, '').toUpperCase();
+      if (normalizedSearch) {
+        return normalizedCode.startsWith(normalizedSearch);
+      }
+      return item.code.toUpperCase().startsWith(searchValue);
+    });
+  }
+
+  working.sort((a, b) => {
+    if (a.requestCount === b.requestCount) {
+      return a.code.localeCompare(b.code, 'fa');
+    }
+    return direction === 'asc'
+      ? a.requestCount - b.requestCount
+      : b.requestCount - a.requestCount;
+  });
+
+  const total = working.length;
+  const safePageSize = Math.max(1, pageSize);
+  const pages = Math.max(1, Math.ceil(total / safePageSize));
+  const safePage = Math.min(Math.max(1, page), pages);
+  const startIndex = (safePage - 1) * safePageSize;
+  const items = working.slice(startIndex, startIndex + safePageSize);
+
+  return {
+    items,
+    page: safePage,
+    pageSize: safePageSize,
+    total,
+    pages,
+  };
+}
 
 export const API_EVENTS = {
   FALLBACK: 'mvcobot:api-fallback',
@@ -67,9 +148,10 @@ const mockStore = {
       (acc, item) => ({
         telegram: acc.telegram + item.telegram,
         whatsapp: acc.whatsapp + item.whatsapp,
+        privateTelegram: acc.privateTelegram + item.privateTelegram,
         all: acc.all + item.all,
       }),
-      { telegram: 0, whatsapp: 0, all: 0 }
+      { telegram: 0, whatsapp: 0, privateTelegram: 0, all: 0 }
     ),
     monthly: monthlyData,
     cache: {
@@ -83,6 +165,11 @@ const mockStore = {
         weekly: DEFAULT_WEEKLY_SCHEDULE.map((item) => ({ ...item })),
       },
       message: 'ربات فعال و آماده پاسخ‌گویی است.',
+      platforms: {
+        telegram: defaultConfig.TELEGRAM_ENABLED,
+        whatsapp: defaultConfig.WHATSAPP_ENABLED,
+        privateTelegram: defaultConfig.PRIVATE_TELEGRAM_ENABLED,
+      },
       operations: {
         lunchBreak: { start: '12:30', end: '13:30' },
         queryLimit: 50,
@@ -141,6 +228,7 @@ const mockStore = {
     platforms: {
       telegram: defaultConfig.TELEGRAM_ENABLED,
       whatsapp: defaultConfig.WHATSAPP_ENABLED,
+      privateTelegram: defaultConfig.PRIVATE_TELEGRAM_ENABLED,
     },
     lunchBreak: { start: '12:30', end: '13:30' },
     queryLimit: 50,
@@ -174,6 +262,33 @@ const mockStore = {
       actor: 'کنترل‌پنل',
     },
   ],
+  privateTelegram: {
+    enabled: true,
+    dmEnabled: true,
+    apiId: 123456,
+    apiHash: 'samplehash',
+    phoneNumber: '+989120000000',
+    dataSource: 'sql',
+    excelFile: 'inventory.xlsx',
+    cacheDurationMinutes: 20,
+    mainGroupId: -1001234567890,
+    newGroupId: -1001987654321,
+    adminGroupIds: [-1001987654321],
+    secondaryGroupIds: [-1001122334455],
+    workingHours: { start: '08:00', end: '17:30' },
+    thursdayHours: { start: '08:00', end: '13:30' },
+    disableFriday: true,
+    lunchBreak: { start: '14:00', end: '14:30' },
+    queryLimit: 50,
+    deliveryInfo: {
+      before15: 'تحویل کالا پیش از ساعت ۱۵ از دفتر بازار انجام می‌شود.',
+      after15: 'پس از ساعت ۱۵ تحویل با هماهنگی پیک انجام خواهد شد.',
+    },
+    changeoverHour: '15:00',
+    blacklist: [437739989],
+    dataSourceOrigin: 'mock',
+  },
+  codeStats: codeStatsBase,
 };
 
 const delay = (ms = 360) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -307,6 +422,83 @@ export const api = {
     return result;
   },
 
+  async getCodeStats({ range = '1m', sort = 'desc', page = 1, pageSize = 20, search = '' } = {}) {
+    const params = new URLSearchParams({
+      range,
+      sort,
+      page: String(page),
+      pageSize: String(pageSize),
+    });
+    if (search && search.trim()) {
+      params.set('search', search.trim());
+    }
+
+    const mockHandler = () => {
+      const snapshot = buildMockCodeStats({
+        rangeKey: range,
+        sortOrder: sort,
+        page,
+        pageSize,
+        searchTerm: search,
+      });
+      return {
+        items: snapshot.items.map((item) => ({
+          code: item.code,
+          partName: item.partName,
+          requestCount: item.requestCount,
+        })),
+        page: snapshot.page,
+        pageSize: snapshot.pageSize,
+        total: snapshot.total,
+        pages: snapshot.pages,
+        range,
+        sort,
+        search,
+      };
+    };
+
+    return runWithFallback(
+      'getCodeStats',
+      () => request(`/api/v1/code-stats?${params.toString()}`),
+      mockHandler
+    );
+  },
+
+  async refreshCodeNames({ limit, scope } = {}) {
+    const payload = {};
+    if (typeof limit !== 'undefined' && limit !== null) {
+      const numericLimit = Number(limit);
+      if (!Number.isNaN(numericLimit)) {
+        payload.limit = numericLimit;
+      }
+    }
+
+    if (typeof scope === 'string' && scope.trim()) {
+      payload.scope = scope.trim();
+    }
+
+    const mockHandler = async () => {
+      await delay(180);
+      return {
+        updated: 0,
+        limit: payload.limit ?? null,
+        scope: payload.scope ?? 'missing',
+      };
+    };
+
+    const body = Object.keys(payload).length ? payload : {};
+
+    return runWithFallback(
+      'refreshCodeNames',
+      () =>
+        request('/api/v1/code-stats/refresh-names', {
+          method: 'POST',
+          body,
+        }),
+      mockHandler
+    );
+  },
+
   async getCommands() {
     return runWithFallback(
       'getCommands',
@@ -428,6 +620,10 @@ export const api = {
           ...mockStore.settings.platforms,
           ...payload.platforms,
         };
+        mockStore.metrics.status.platforms = {
+          ...mockStore.metrics.status.platforms,
+          ...mockStore.settings.platforms,
+        };
       }
       if (payload.weekly) {
         mockStore.settings.weekly = payload.weekly.map((item) => ({ ...item }));
@@ -527,19 +723,142 @@ export const api = {
     );
   },
 
-  async getAuditLog() {
+  async getAuditLog({ page = 1, pageSize = 20 } = {}) {
+    const parsedPage = Number(page);
+    const parsedSize = Number(pageSize);
+    const safePage = Number.isFinite(parsedPage) && parsedPage > 0 ? Math.floor(parsedPage) : 1;
+    const safeSize = Number.isFinite(parsedSize) && parsedSize > 0 ? Math.floor(parsedSize) : 20;
+    const params = new URLSearchParams({
+      page: String(safePage),
+      pageSize: String(safeSize),
+    });
+
     const result = await runWithFallback(
       'getAuditLog',
-      () => request('/api/v1/audit-log'),
-      () => ({
-        items: mockStore.auditLog,
-        total: mockStore.auditLog.length,
-        dataSource: 'fallback',
-      })
+      () => request(`/api/v1/audit-log?${params.toString()}`),
+      () => {
+        const total = mockStore.auditLog.length;
+        const totalPages = Math.max(1, Math.ceil(total / safeSize));
+        const currentPage = Math.min(safePage, totalPages);
+        const start = (currentPage - 1) * safeSize;
+        const items = mockStore.auditLog.slice(start, start + safeSize);
+        return {
+          items,
+          total,
+          page: currentPage,
+          pageSize: safeSize,
+          pages: totalPages,
+          dataSource: 'fallback',
+        };
+      }
     );
     if (isMockMode() || result?.dataSource === 'fallback') {
       emitFallback({ method: 'getAuditLog', reason: 'usingFallback' });
     }
     return result;
+  },
+
+  async getPrivateTelegramSettings() {
+    return runWithFallback(
+      'getPrivateTelegramSettings',
+      () => request('/api/v1/private-telegram/settings'),
+      () => mockStore.privateTelegram
+    );
+  },
+
+  async updatePrivateTelegramSettings(payload) {
+    const mockHandler = () => {
+      const current = mockStore.privateTelegram;
+      const next = {
+        ...current,
+        ...payload,
+      };
+      if (Object.prototype.hasOwnProperty.call(payload, 'workingHours')) {
+        next.workingHours = {
+          start: payload.workingHours.start ?? '',
+          end: payload.workingHours.end ?? '',
+        };
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'thursdayHours')) {
+        next.thursdayHours = {
+          start: payload.thursdayHours.start ?? '',
+          end: payload.thursdayHours.end ?? '',
+        };
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'lunchBreak')) {
+        next.lunchBreak = {
+          start: payload.lunchBreak.start ?? '',
+          end: payload.lunchBreak.end ?? '',
+        };
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'deliveryInfo')) {
+        next.deliveryInfo = {
+          before15: payload.deliveryInfo.before15 ?? '',
+          after15: payload.deliveryInfo.after15 ?? '',
+        };
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'adminGroupIds')) {
+        next.adminGroupIds = [...(payload.adminGroupIds ?? [])];
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'secondaryGroupIds')) {
+        next.secondaryGroupIds = [...(payload.secondaryGroupIds ?? [])];
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'blacklist')) {
+        next.blacklist = [...(payload.blacklist ?? [])];
+      }
+      const touched = [];
+      if (Object.prototype.hasOwnProperty.call(payload, 'enabled')) touched.push('وضعیت');
+      if (Object.prototype.hasOwnProperty.call(payload, 'dmEnabled')) touched.push('پیام خصوصی');
+      if (
+        Object.prototype.hasOwnProperty.call(payload, 'apiId') ||
+        Object.prototype.hasOwnProperty.call(payload, 'apiHash') ||
+        Object.prototype.hasOwnProperty.call(payload, 'phoneNumber')
+      ) {
+        touched.push('احراز هویت');
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(payload, 'dataSource') ||
+        Object.prototype.hasOwnProperty.call(payload, 'excelFile')
+      ) {
+        touched.push('منبع داده');
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'cacheDurationMinutes'))
+        touched.push('کش');
+      if (
+        Object.prototype.hasOwnProperty.call(payload, 'mainGroupId') ||
+        Object.prototype.hasOwnProperty.call(payload, 'newGroupId') ||
+        Object.prototype.hasOwnProperty.call(payload, 'adminGroupIds')
+      )
+        touched.push('گروه‌ها');
+      if (
+        Object.prototype.hasOwnProperty.call(payload, 'workingHours') ||
+        Object.prototype.hasOwnProperty.call(payload, 'thursdayHours') ||
+        Object.prototype.hasOwnProperty.call(payload, 'disableFriday')
+      )
+        touched.push('ساعات کاری');
+      if (Object.prototype.hasOwnProperty.call(payload, 'lunchBreak')) touched.push('ناهار');
+      if (Object.prototype.hasOwnProperty.call(payload, 'queryLimit')) touched.push('محدودیت');
+      if (
+        Object.prototype.hasOwnProperty.call(payload, 'deliveryInfo') ||
+        Object.prototype.hasOwnProperty.call(payload, 'changeoverHour')
+      ) {
+        touched.push('پیام تحویل');
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'blacklist')) {
+        touched.push('لیست سیاه خصوصی');
+      }
+      mockStore.privateTelegram = next;
+      if (touched.length) {
+        const summary = [...new Set(touched)].join('، ');
+        pushMockAudit('به‌روزرسانی تنظیمات تلگرام خصوصی', summary);
+      }
+      return next;
+    };
+
+    return runWithFallback(
+      'updatePrivateTelegramSettings',
+      () => request('/api/v1/private-telegram/settings', { method: 'PUT', body: payload }),
+      mockHandler
+    );
   },
 };
