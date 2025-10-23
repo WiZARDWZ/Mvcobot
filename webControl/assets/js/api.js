@@ -105,11 +105,11 @@ function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize, searchTerm = 
   if (searchValue) {
     const normalizedSearch = searchValue.replace(/[^A-Z0-9]/g, '');
     working = working.filter((item) => {
-      const normalizedCode = item.code.replace(/-/g, '');
-      if (normalizedSearch && normalizedCode.includes(normalizedSearch)) {
-        return true;
+      const normalizedCode = item.code.replace(/-/g, '').toUpperCase();
+      if (normalizedSearch) {
+        return normalizedCode.startsWith(normalizedSearch);
       }
-      return item.code.toUpperCase().includes(searchValue);
+      return item.code.toUpperCase().startsWith(searchValue);
     });
   }
 

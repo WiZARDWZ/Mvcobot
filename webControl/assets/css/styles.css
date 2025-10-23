@@ -841,10 +841,15 @@ tbody tr:nth-of-type(odd) {
 
 .filter-bar {
   display: flex;
-  align-items: flex-end;
-  gap: 1rem;
-  margin-bottom: 1.5rem;
   flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1.25rem;
+  margin-bottom: 1.75rem;
+  padding: 1rem 1.25rem;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 25px rgba(15, 23, 42, 0.04);
 }
 
 .filter-bar__group {
@@ -879,6 +884,12 @@ tbody tr:nth-of-type(odd) {
   transition: border-color var(--transition-base), box-shadow var(--transition-base);
 }
 
+.filter-bar__input--search {
+  min-width: 18rem;
+  max-width: 100%;
+  font-size: 0.95rem;
+}
+
 .filter-bar__input:focus {
   outline: none;
   border-color: var(--color-primary);
@@ -890,10 +901,20 @@ tbody tr:nth-of-type(odd) {
   gap: 0.5rem;
   align-items: flex-end;
   flex-wrap: wrap;
+  margin-inline-start: auto;
 }
 
 .filter-bar .btn {
   height: 2.4rem;
+}
+
+.filter-bar__group--grow {
+  flex: 1 1 220px;
+}
+
+.filter-bar__actions .btn {
+  min-width: 8.5rem;
+  justify-content: center;
 }
 
 .code-chip {

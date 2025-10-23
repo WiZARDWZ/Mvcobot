@@ -54,15 +54,18 @@ export async function mount(container) {
   });
   sortWrapper.appendChild(sortSelect);
 
-  const searchWrapper = createElement('label', { classes: ['filter-bar__group'] });
+  const searchWrapper = createElement('label', {
+    classes: ['filter-bar__group', 'filter-bar__group--grow'],
+  });
   const searchLabel = createElement('span', { classes: ['filter-bar__label'], text: 'جستجوی کد' });
   const searchInput = createElement('input', {
-    classes: ['filter-bar__input'],
+    classes: ['filter-bar__input', 'filter-bar__input--search'],
     attrs: {
       type: 'text',
       placeholder: 'مثال: 12345-67890',
       inputmode: 'text',
       autocomplete: 'off',
+      dir: 'ltr',
     },
   });
   searchWrapper.append(searchLabel, searchInput);

@@ -4,7 +4,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pyodbc
 from config import BOT_DB_CONFIG, DB_CONFIG
-from utils.code_standardization import format_display_code, normalize_code
+from utils.code_standardization import normalize_code
 
 _SPAM_GUARD_WINDOW_SECONDS = 2
 
@@ -59,8 +59,9 @@ def _fetch_part_names_from_inventory(
     """Return part-name mapping for the provided codes without stock filters.
 
     ``code_pairs`` must contain tuples of ``(code_norm, code_display)``. The
-    query intentionally uses ``LEFT JOIN`` and avoids any ``quantity`` filter so
-    that parts without stock still return their latest title.
+    lookup embeds the finance-provided inventory query (purchases, stock
+    summary, fee sale) so that titles match the reporting system, while keeping
+    the joins ``LEFT`` to include parts with zero quantity.
     """
 
     unique_pairs: List[Tuple[str, str]] = []
@@ -85,57 +86,119 @@ def _fetch_part_names_from_inventory(
         params.extend([norm_value, display_value])
 
     primary_query = f"""
-        DECLARE @FiscalYear INT = (SELECT MAX(FiscalYearId) FROM FMK.FiscalYear);
+        DECLARE @RgParamFiscalYearID INT = (SELECT MAX(FiscalYearId) FROM FMK.FiscalYear);
+        DECLARE @SearchTerm NVARCHAR(100) = N'';
 
         WITH requested(code_norm, code_display) AS (
             {selects}
         ),
-        items AS (
+        purch AS (
             SELECT
-                REPLACE(i.Code, '-', '') AS code_norm,
-                i.Code AS code_display,
-                i.Title AS part_name
-            FROM inv.vwItem AS i
+                r.Number,
+                r.Date,
+                r.DelivererCode,
+                r.DelivererTitle,
+                ri.ItemCode,
+                ri.ItemTitle,
+                ri.Quantity,
+                ri.Fee,
+                ri.Price,
+                r.StockTitle,
+                ri.TracingTitle
+            FROM inv.vwInventoryReceipt r
+            LEFT JOIN INV.vwInventoryReceiptItem ri
+                ON r.InventoryReceiptID = ri.InventoryReceiptRef
+            WHERE r.FiscalYearRef = @RgParamFiscalYearID
+              AND r.Type = 1
         ),
-        aggregated AS (
+        Item AS (
             SELECT
-                req.code_norm,
-                req.code_display,
-                COALESCE(NULLIF(LTRIM(RTRIM(items.part_name)), ''), '-') AS part_name,
-                MAX(COALESCE(stock.Quantity, 0)) AS quantity
-            FROM requested AS req
-            LEFT JOIN items
-                ON items.code_norm = req.code_norm
-            LEFT JOIN inv.vwItemStockSummary AS stock
-                ON stock.ItemCode = items.code_display
-               AND stock.FiscalYearRef = @FiscalYear
-            GROUP BY
-                req.code_norm,
-                req.code_display,
-                COALESCE(NULLIF(LTRIM(RTRIM(items.part_name)), ''), '-')
+                i.UnitTitle,
+                i.Code,
+                i.iranCode,
+                i.SaleGroupTitle,
+                p.PropertyAmount1,
+                i.Title,
+                ii.StockTitle
+            FROM inv.vwItem i
+            LEFT JOIN inv.vwItemPropertyAmount p
+                ON i.ItemID = p.ItemRef
+            LEFT JOIN inv.vwItemStock ii
+                ON i.ItemID = ii.ItemRef
+            WHERE i.Type = 1
+              AND (@SearchTerm = '' OR i.Code LIKE '%' + @SearchTerm + '%')
+              AND EXISTS (
+                  SELECT 1
+                  FROM requested req
+                  WHERE req.code_display = i.Code
+                     OR req.code_norm = REPLACE(i.Code, '-', '')
+              )
+        ),
+        StockSumery AS (
+            SELECT
+                ItemCode,
+                StockTitle,
+                SUM(Quantity) AS Quantity,
+                TracingTitle
+            FROM inv.vwItemStockSummary
+            WHERE FiscalYearRef = @RgParamFiscalYearID
+            GROUP BY ItemCode, StockTitle, TracingTitle
+        ),
+        FeeSale AS (
+            SELECT ItemCode, TracingTitle, Fee
+            FROM sls.vwPriceNoteItem
+            WHERE Fee > 0
+        ),
+        inventory_data AS (
+            SELECT
+                i.Code AS [کد کالا],
+                i.iranCode AS [Iran Code],
+                i.Title AS [نام کالا],
+                i.UnitTitle AS [واحد سنجش],
+                i.SaleGroupTitle AS [گروه فروش],
+                p.DelivererCode AS [کد تامین کننده],
+                p.DelivererTitle AS [نام تامین کننده],
+                p.Date AS [تاریخ],
+                p.Number AS [شماره],
+                p.Fee AS [فی خرید],
+                p.Quantity AS [تعداد خرید],
+                p.Price AS [مبلغ خرید],
+                i.StockTitle AS [انبار],
+                COALESCE(p.TracingTitle, s.TracingTitle, 'نا مشخص') AS [عامل ردیابی],
+                s.Quantity AS [موجودی],
+                fs.Fee AS [فی فروش]
+            FROM Item i
+            LEFT JOIN purch p
+                ON i.Code = p.ItemCode
+               AND i.StockTitle = p.StockTitle
+            LEFT JOIN StockSumery s
+                ON i.Code = s.ItemCode
+               AND i.StockTitle = s.StockTitle
+               AND COALESCE(p.TracingTitle, '') = COALESCE(s.TracingTitle, '')
+            LEFT JOIN FeeSale fs
+                ON i.Code = fs.ItemCode
+               AND COALESCE(s.TracingTitle, '') = COALESCE(fs.TracingTitle, '')
         )
-        SELECT code_norm, code_display, part_name
-        FROM aggregated
+        SELECT DISTINCT
+            req.code_norm,
+            req.code_display,
+            COALESCE(NULLIF(LTRIM(RTRIM(inv.[نام کالا])), ''), '-') AS part_name
+        FROM requested AS req
+        LEFT JOIN inventory_data AS inv
+            ON inv.[کد کالا] = req.code_display
     """
 
     fallback_query = f"""
         WITH requested(code_norm, code_display) AS (
             {selects}
-        ),
-        items AS (
-            SELECT
-                REPLACE(i.Code, '-', '') AS code_norm,
-                i.Code AS code_display,
-                i.Title AS part_name
-            FROM inv.vwItem AS i
         )
         SELECT
             req.code_norm,
             req.code_display,
-            COALESCE(NULLIF(LTRIM(RTRIM(items.part_name)), ''), '-') AS part_name
+            COALESCE(NULLIF(LTRIM(RTRIM(items.Title)), ''), '-') AS part_name
         FROM requested AS req
-        LEFT JOIN items
-            ON items.code_norm = req.code_norm
+        LEFT JOIN inv.vwItem AS items
+            ON REPLACE(items.Code, '-', '') = req.code_norm
     """
 
     try:
@@ -475,17 +538,23 @@ def record_code_request(
 
 
 def _prepare_search_filter(search: Optional[str]) -> Optional[Tuple[str, str]]:
+    """Return ``LIKE`` patterns for filtering statistics by code prefix."""
+
     if search in (None, ""):
         return None
+
     normalized = normalize_code(str(search))
-    if len(normalized) < 7:
+    if not normalized:
         return None
-    if len(normalized) >= 10:
-        padded = normalized[:10]
+
+    prefix_norm = normalized.upper()
+
+    if len(prefix_norm) <= 5:
+        display_prefix = prefix_norm
     else:
-        padded = normalized + ("X" * (10 - len(normalized)))
-    display = format_display_code(padded)
-    return padded, display
+        display_prefix = f"{prefix_norm[:5]}-{prefix_norm[5:]}"
+
+    return f"{prefix_norm}%", f"{display_prefix}%"
 
 
 def _resolve_code_range(range_key: str) -> Optional[datetime]:
@@ -533,7 +602,7 @@ def fetch_code_statistics(
 
     search_filter = _prepare_search_filter(search)
     if search_filter:
-        filters.append("(code_norm = ? OR code_display = ?)")
+        filters.append("(code_norm LIKE ? OR UPPER(code_display) LIKE ?)")
         params.extend(search_filter)
 
     where_clause = ""
