@@ -331,25 +331,13 @@ export async function mount(container) {
   const cacheRelative = createElement('p', { classes: ['cache-card__meta', 'cache-card__meta--muted'] });
   cacheCard.append(cacheTitle, cacheMeta, cacheRelative);
 
-  const rateCard = createElement('section', { classes: ['card', 'rate-card'] });
-  const rateTitle = createElement('h4', { classes: ['card__title'], text: 'محدودیت نرخ' });
-  const rateValue = createElement('p', { classes: ['rate-card__value'] });
-  const rateProgress = createElement('div', {
-    classes: ['progress'],
-    attrs: { role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '1000', 'aria-valuenow': '0' },
-  });
-  const rateProgressFill = createElement('span', { classes: ['progress__fill'] });
-  rateProgress.append(rateProgressFill);
-  const rateMeta = createElement('p', { classes: ['rate-card__meta'] });
-  rateCard.append(rateTitle, rateValue, rateProgress, rateMeta);
-
   const hoursCard = createElement('section', { classes: ['card', 'hours-card'] });
   const hoursTitle = createElement('h4', { classes: ['card__title'], text: 'ساعات کاری' });
   const hoursTimezone = createElement('p', { classes: ['hours-card__timezone'] });
   const hoursListWrapper = createElement('div', { classes: ['hours-card__list'] });
   hoursCard.append(hoursTitle, hoursTimezone, hoursListWrapper);
 
-  layout.append(statsGrid, analyticsCard, statusCard, cacheCard, rateCard, hoursCard);
+  layout.append(statsGrid, analyticsCard, statusCard, cacheCard, hoursCard);
   container.append(header, layout);
 
   const loadingState = createLoadingState();
@@ -519,18 +507,6 @@ export async function mount(container) {
       deliveryRow,
       fallbackRow
     );
-
-    const queryLimit = operations.queryLimit;
-    const limitNumber = typeof queryLimit === 'number' && queryLimit > 0 ? queryLimit : 0;
-    const rateText =
-      limitNumber > 0 ? `${limitNumber.toLocaleString('fa-IR')} پیام در روز` : 'بدون محدودیت مشخص';
-    rateValue.textContent = rateText;
-    const maxRate = 1000;
-    const progressValue = Math.max(0, Math.min(limitNumber / maxRate, 1));
-    rateProgressFill.style.setProperty('--progress-value', `${progressValue * 100}`);
-    rateProgressFill.style.width = `${progressValue * 100}%`;
-    rateProgress.setAttribute('aria-valuenow', String(limitNumber));
-    rateMeta.textContent = 'حداکثر پیشنهادی: ۱۰۰۰ پیام در روز';
 
     hoursTimezone.textContent = `منطقه زمانی: ${workingHours.timezone ?? 'تعریف نشده'}`;
     clearChildren(hoursListWrapper);
