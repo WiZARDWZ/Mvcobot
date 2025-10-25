@@ -21,6 +21,80 @@ const SORT_OPTIONS = [
   { value: 'asc', label: 'کمترین درخواست' },
 ];
 
+function formatCompactCode(code) {
+  const value = typeof code === 'string' ? code.trim() : '';
+  if (!value) {
+    return '—';
+  }
+  const threshold = 10;
+  if (value.length <= threshold) {
+    return value;
+  }
+  const prefix = value.slice(0, 3);
+  const suffix = value.slice(-3);
+  return `${prefix}…${suffix}`;
+}
+
+function createCodeChip(code) {
+  const value = typeof code === 'string' ? code.trim() : '';
+  const compact = formatCompactCode(value);
+  const chip = createElement('span', { classes: ['code-chip'] });
+
+  if (!value) {
+    chip.textContent = '—';
+    chip.classList.add('code-chip--empty');
+    return chip;
+  }
+
+  chip.textContent = compact;
+  chip.setAttribute('title', value);
+
+  if (compact !== value) {
+    chip.classList.add('code-chip--interactive');
+    chip.setAttribute('role', 'button');
+    chip.setAttribute('tabindex', '0');
+    chip.dataset.compact = compact;
+    chip.dataset.full = value;
+    chip.dataset.expanded = 'false';
+
+    const toggle = () => {
+      const expanded = chip.dataset.expanded === 'true';
+      if (expanded) {
+        chip.textContent = chip.dataset.compact;
+        chip.dataset.expanded = 'false';
+      } else {
+        chip.textContent = chip.dataset.full;
+        chip.dataset.expanded = 'true';
+      }
+    };
+
+    chip.addEventListener('click', toggle);
+    chip.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        toggle();
+      }
+    });
+    chip.addEventListener('blur', () => {
+      if (chip.dataset.expanded === 'true') {
+        chip.textContent = chip.dataset.compact;
+        chip.dataset.expanded = 'false';
+      }
+    });
+  }
+
+  return chip;
+}
+
+function resolvePartName(name) {
+  if (!name) return '—';
+  const text = String(name).trim();
+  if (!text || text === '-') {
+    return '—';
+  }
+  return text;
+}
+
 export async function mount(container) {
   const heading = createElement('div', { classes: ['section-heading'] });
   heading.append(
@@ -88,11 +162,11 @@ export async function mount(container) {
     [
       {
         label: 'کد قطعه',
-        render: (row) => createElement('span', { classes: ['code-chip'], text: row.code || '—' }),
+        render: (row) => createCodeChip(row.code),
       },
       {
         label: 'نام قطعه',
-        render: (row) => row.partName || '—',
+        render: (row) => resolvePartName(row.partName),
       },
       {
         label: 'تعداد درخواست',
