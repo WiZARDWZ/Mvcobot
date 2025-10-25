@@ -29,6 +29,7 @@ from config import BOT_TOKEN
 from control_panel import start_control_panel_server
 import control_panel.runtime as control_panel_runtime
 from control_panel.logic import get_platform_snapshot
+from dm_bot import get_dm_service
 
 from handlers.start import start
 from handlers.inventory import (
@@ -397,10 +398,14 @@ def main():
     else:
         print("[WebControl] Control panel server failed to start.")
 
+    dm_service = get_dm_service()
+    dm_service.start()
+
     app = _build_application()
     try:
         _run_polling_resilient(app)
     finally:
+        dm_service.stop()
         if server:
             try:
                 server.shutdown()
