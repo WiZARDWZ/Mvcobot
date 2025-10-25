@@ -111,16 +111,11 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
             self._handle_api(lambda: (HTTPStatus.OK, logic.toggle_bot(active)))
         elif path == "/api/v1/cache/invalidate":
             self._handle_api(lambda: (HTTPStatus.OK, logic.invalidate_cache()))
-        elif path == "/api/v1/code-stats/refresh-names":
-            limit_value = None
-            if isinstance(body, dict):
-                limit_value = body.get("limit")
-            self._handle_api(
-                lambda: (
-                    HTTPStatus.OK,
-                    logic.refresh_code_stat_names(limit=limit_value),
-                )
-            )
+        elif path == "/api/dm/settings":
+            self._handle_api(lambda: (HTTPStatus.OK, logic.update_dm_settings(body)))
+        elif path == "/api/dm/test":
+            message = body.get("message") if isinstance(body, dict) else None
+            self._handle_api(lambda: (HTTPStatus.OK, logic.send_dm_test(message)))
         else:
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint not found")
 
@@ -218,14 +213,9 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
                 )
             )
         elif path == "/api/v1/audit-log":
-            page = self._parse_positive_int(query.get("page", ["1"]), 1)
-            page_size = self._parse_positive_int(query.get("pageSize", ["20"]), 20)
-            self._handle_api(
-                lambda: (
-                    HTTPStatus.OK,
-                    logic.get_audit_log(page=page, page_size=page_size),
-                )
-            )
+            self._handle_api(lambda: (HTTPStatus.OK, logic.get_audit_log()))
+        elif path == "/api/dm/settings":
+            self._handle_api(lambda: (HTTPStatus.OK, logic.get_dm_settings()))
         else:
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint not found")
 

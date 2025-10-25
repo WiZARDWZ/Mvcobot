@@ -7,6 +7,7 @@ import {
   createBadge,
   createElement,
   createLoadingState,
+  createPrefixSearch,
   createToggle,
   formatDateTime,
   formatRelativeTime,
@@ -15,6 +16,11 @@ import {
 } from './components.js';
 
 let chartInstance = null;
+
+function formatCount(value) {
+  const number = Number(value ?? 0);
+  return Number.isFinite(number) ? number.toLocaleString('fa-IR') : '۰';
+}
 
 function destroyChart() {
   if (chartInstance) {
@@ -107,6 +113,50 @@ export async function mount(container) {
     createElement('h3', { classes: ['section-heading__title'], text: 'نمای کلی ربات' })
   );
 
+  const statsSearchCard = createElement('div', { classes: ['card'] });
+  const statsSearchHeader = createElement('div', { classes: ['section-heading'] });
+  statsSearchHeader.append(
+    createElement('h4', { classes: ['section-heading__title'], text: 'جستجوی آمار' }),
+    createElement('p', {
+      classes: ['section-heading__subtitle'],
+      text: 'برای فیلتر سریع، عبارت یا عدد را تایپ کنید. هر واژه باید ابتدای کلمه‌ای در داده‌ها باشد.',
+    })
+  );
+
+  const statsSearch = createPrefixSearch({
+    placeholder: 'مثلاً «ماه فرو» یا «250»',
+    ariaLabel: 'جستجو در آمار',
+    searchKey: 'title',
+    secondaryKeys: ['code', 'subtitle'],
+    minChars: 1,
+    debounceMs: 200,
+    maxResults: 50,
+    andLogic: true,
+    matchFrom: ['startOfString', 'startOfWord'],
+    normalize: {
+      trim: true,
+      collapseWhitespace: true,
+      caseInsensitive: true,
+      persianArabicUnify: true,
+      stripDiacritics: true,
+      normalizeDigits: 'both',
+    },
+    highlight: {
+      enabled: true,
+      tag: 'mark',
+      className: 'highlight',
+    },
+    emptyQueryBehavior: 'all',
+    rtlSupport: true,
+    messages: {
+      initial: 'برای فیلتر کردن تایپ کنید.',
+      noData: 'داده‌ای برای نمایش وجود ندارد.',
+      noResults: 'هیچ نتیجه‌ای یافت نشد.',
+    },
+  });
+
+  statsSearchCard.append(statsSearchHeader, statsSearch.wrapper);
+
   const statsGrid = createElement('div', { classes: ['grid', 'grid--stats'] });
   const chartCard = createElement('div', { classes: ['card', 'chart-card'] });
   const chartContainer = createElement('div', { classes: ['chart-container'] });
@@ -123,7 +173,7 @@ export async function mount(container) {
   const cacheRelative = createElement('p', { classes: ['card__meta'] });
   cacheCard.append(cacheTitle, cacheMeta, cacheRelative);
 
-  container.append(header, statsGrid, chartCard, cacheCard, statusCard);
+  container.append(header, statsSearchCard, statsGrid, chartCard, cacheCard, statusCard);
 
   const loadingState = createLoadingState();
   container.appendChild(loadingState);
@@ -156,6 +206,37 @@ export async function mount(container) {
       renderStatsCard({ label: 'تلگرام خصوصی', value: data.totals.privateTelegram ?? 0 }),
       renderStatsCard({ label: 'واتساپ', value: data.totals.whatsapp })
     );
+
+    const monthly = Array.isArray(data.monthly) ? data.monthly : [];
+    const summaryRecords = [
+      {
+        id: 'totals-all',
+        title: 'کل مکالمات',
+        code: String(data.totals.all ?? ''),
+        subtitle: `مجموع کل مکالمات ثبت‌شده: ${formatCount(data.totals.all)}`,
+      },
+      {
+        id: 'totals-telegram',
+        title: 'آمار تلگرام',
+        code: String(data.totals.telegram ?? ''),
+        subtitle: `گفت‌وگوهای تلگرام: ${formatCount(data.totals.telegram)}`,
+      },
+      {
+        id: 'totals-whatsapp',
+        title: 'آمار واتساپ',
+        code: String(data.totals.whatsapp ?? ''),
+        subtitle: `گفت‌وگوهای واتساپ: ${formatCount(data.totals.whatsapp)}`,
+      },
+    ];
+
+    const monthlyRecords = monthly.map((item, index) => ({
+      id: `monthly-${index}`,
+      title: `${index + 1}. ماه ${item.month}`,
+      code: String(item.all ?? ''),
+      subtitle: `کل: ${formatCount(item.all)} | تلگرام: ${formatCount(item.telegram)} | واتساپ: ${formatCount(item.whatsapp)}`,
+    }));
+
+    statsSearch.setItems([...summaryRecords, ...monthlyRecords]);
 
     clearChildren(chartContainer);
     buildChart(chartContainer, data);
@@ -270,6 +351,7 @@ export async function mount(container) {
     },
     destroy() {
       destroyChart();
+      statsSearch.destroy?.();
     },
   };
 }
