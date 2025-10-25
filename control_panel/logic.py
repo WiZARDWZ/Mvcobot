@@ -25,7 +25,6 @@ from database.connector_bot import (
     set_setting,
 )
 from handlers.inventory import refresh_inventory_cache_once
-from dm_bot import get_dm_service
 from . import runtime
 
 LOGGER = logging.getLogger(__name__)
@@ -98,32 +97,6 @@ CHANGEOVER_KEY = "changeover_hour"
 AUDIT_LOG_KEY = "panel_audit_log_v1"
 BLOCKLIST_META_KEY = "panel_blocklist_meta_v1"
 
-DM_SETTING_KEYS = [
-    'DM_ENABLED',
-    'DM_BOT_TOKEN',
-    'DM_CHANNEL_ID',
-    'WORK_HOURS_START',
-    'WORK_HOURS_END',
-    'DM_RATE_LIMIT',
-    'DM_WHITELIST',
-    'DM_REPLY_START',
-    'DM_REPLY_OFF_HOURS',
-    'DM_REPLY_GENERIC',
-    'DM_START_REPLY',
-    'DM_OFF_HOURS_REPLY',
-    'DM_GENERIC_REPLY',
-    'DM_START_MESSAGE',
-    'DM_OFF_HOURS_MESSAGE',
-    'DM_DEFAULT_REPLY',
-    'DM_MESSAGE_DEFAULT',
-    'START_REPLY',
-    'START_MESSAGE',
-    'OFF_HOURS_REPLY',
-    'OFF_HOURS_MESSAGE',
-    'GENERIC_REPLY',
-    'DEFAULT_REPLY',
-]
-
 WORKING_DAY_ORDER = [5, 6, 0, 1, 2, 3, 4]  # Saturday → Friday (Python weekday numbering)
 
 MAX_AUDIT_LOG_ENTRIES = 200
@@ -161,34 +134,6 @@ def _normalize_time(value: Optional[str], field_name: str) -> str:
         raise ControlPanelError(f"زمان {field_name} باید در قالب HH:MM باشد.")
     return text
 
-
-def _coerce_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    text = str(value or '').strip().lower()
-    return text in {'1', 'true', 'yes', 'on'}
-
-
-def _coerce_whitelist(value: Any) -> str:
-    if value is None:
-        return ''
-    if isinstance(value, (list, tuple, set)):
-        tokens = []
-        for item in value:
-            try:
-                tokens.append(str(int(str(item).strip())))
-            except Exception:
-                continue
-        return ','.join(tokens)
-    text_value = str(value).replace('\n', ',').replace('\r', ',')
-    parts = [segment.strip() for segment in text_value.split(',') if segment.strip()]
-    tokens = []
-    for segment in parts:
-        try:
-            tokens.append(str(int(segment)))
-        except Exception:
-            continue
-    return ','.join(tokens)
 
 def _safe_int(value: Optional[str]) -> Optional[int]:
     if value is None:
@@ -1528,107 +1473,3 @@ def get_health() -> Dict[str, Any]:
         "status": "ok",
         "time": _now_iso(),
     }
-
-def _load_dm_settings() -> Dict[str, str]:
-    data: Dict[str, str] = {}
-    for key in DM_SETTING_KEYS:
-        value = get_setting(key)
-        data[key] = value if value is not None else ''
-    return data
-
-
-def get_dm_settings() -> Dict[str, Any]:
-    service = get_dm_service()
-    service.start()
-    raw = _load_dm_settings()
-    settings = {
-        'enabled': _coerce_bool(raw.get('DM_ENABLED')),
-        'token': raw.get('DM_BOT_TOKEN', ''),
-        'channelId': raw.get('DM_CHANNEL_ID', ''),
-        'workHoursStart': raw.get('WORK_HOURS_START', ''),
-        'workHoursEnd': raw.get('WORK_HOURS_END', ''),
-        'rateLimit': raw.get('DM_RATE_LIMIT', ''),
-        'whitelist': raw.get('DM_WHITELIST', ''),
-        'startReply': (
-            raw.get('DM_REPLY_START')
-            or raw.get('DM_START_REPLY')
-            or raw.get('DM_START_MESSAGE')
-            or raw.get('START_REPLY')
-            or raw.get('START_MESSAGE')
-            or raw.get('DEFAULT_REPLY')
-            or ''
-        ),
-        'offHoursReply': (
-            raw.get('DM_REPLY_OFF_HOURS')
-            or raw.get('DM_OFF_HOURS_REPLY')
-            or raw.get('DM_OFF_HOURS_MESSAGE')
-            or raw.get('OFF_HOURS_REPLY')
-            or raw.get('OFF_HOURS_MESSAGE')
-            or ''
-        ),
-        'genericReply': (
-            raw.get('DM_REPLY_GENERIC')
-            or raw.get('DM_GENERIC_REPLY')
-            or raw.get('DM_DEFAULT_REPLY')
-            or raw.get('DM_MESSAGE_DEFAULT')
-            or raw.get('GENERIC_REPLY')
-            or raw.get('DEFAULT_REPLY')
-            or ''
-        ),
-    }
-    return {
-        'settings': settings,
-        'status': service.status(),
-    }
-
-
-def update_dm_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
-    if not isinstance(payload, dict):
-        raise ControlPanelError('ساختار تنظیمات نامعتبر است.')
-    enabled = _coerce_bool(payload.get('enabled'))
-    token = str(payload.get('token') or '').strip()
-    channel_id = str(payload.get('channelId') or '').strip()
-    start = _normalize_time(payload.get('workHoursStart'), 'شروع ساعات کاری DM')
-    end = _normalize_time(payload.get('workHoursEnd'), 'پایان ساعات کاری DM')
-    rate_limit = str(payload.get('rateLimit') or '').strip()
-    whitelist = _coerce_whitelist(payload.get('whitelist'))
-    start_reply = str(payload.get('startReply') or '').strip()
-    off_hours_reply = str(payload.get('offHoursReply') or '').strip()
-    generic_reply = str(payload.get('genericReply') or '').strip()
-
-    set_setting('DM_ENABLED', 'true' if enabled else 'false')
-    set_setting('DM_BOT_TOKEN', token)
-    set_setting('DM_CHANNEL_ID', channel_id)
-    set_setting('WORK_HOURS_START', start)
-    set_setting('WORK_HOURS_END', end)
-    set_setting('DM_RATE_LIMIT', rate_limit)
-    set_setting('DM_WHITELIST', whitelist)
-    if 'startReply' in payload:
-        set_setting('DM_REPLY_START', start_reply)
-    if 'offHoursReply' in payload:
-        set_setting('DM_REPLY_OFF_HOURS', off_hours_reply)
-    if 'genericReply' in payload:
-        set_setting('DM_REPLY_GENERIC', generic_reply)
-
-    service = get_dm_service()
-    service.start()
-    service.reload()
-    _append_audit_event('به‌روزرسانی تنظیمات DM Bot', details={
-        'enabled': enabled,
-        'channelId': channel_id or None,
-        'workHoursStart': start or None,
-        'workHoursEnd': end or None,
-    })
-    return get_dm_settings()
-
-
-def send_dm_test(message: Optional[str] = None) -> Dict[str, Any]:
-    service = get_dm_service()
-    service.start()
-    text = str(message or 'پیام تست DM Bot از کنترل‌پنل')
-    success = service.send_test_message(text)
-    if not success:
-        raise ControlPanelError('ارسال پیام تست امکان‌پذیر نبود. Bot Token، کانال یا وضعیت اتصال را بررسی کنید.', status=400)
-    _append_audit_event('ارسال پیام تست DM Bot', details=text[:120])
-    return {'success': True}
-
