@@ -57,6 +57,9 @@ export async function mount(container) {
   );
   container.append(header);
 
+  const layout = createElement('div', { classes: ['page-layout'] });
+  container.append(layout);
+
   const loading = createLoadingState('در حال دریافت تنظیمات تلگرام خصوصی...');
   container.append(loading);
 
@@ -178,7 +181,7 @@ export async function mount(container) {
   generalActions.append(generalSubmit);
   generalForm.append(generalActions);
   generalCard.append(generalForm);
-  container.append(generalCard);
+  layout.append(generalCard);
 
   const updateExcelVisibility = () => {
     const value = dataSourceSelect.value;
@@ -368,7 +371,7 @@ export async function mount(container) {
   scheduleActions.append(scheduleSubmit);
   scheduleForm.append(scheduleActions);
   scheduleCard.append(scheduleForm);
-  container.append(scheduleCard);
+  layout.append(scheduleCard);
 
   const handleScheduleSubmit = async (event) => {
     event.preventDefault();
@@ -493,7 +496,7 @@ export async function mount(container) {
   groupsActions.append(groupsSubmit);
   groupsForm.append(groupsActions);
   groupsCard.append(groupsForm);
-  container.append(groupsCard);
+  layout.append(groupsCard);
 
   const handleGroupsSubmit = async (event) => {
     event.preventDefault();
