@@ -4,6 +4,20 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Mvcobot Control Panel</title>
+    <script>
+      try {
+        const storedTheme = localStorage.getItem('mvcobot:theme');
+        if (storedTheme === 'light' || storedTheme === 'dark') {
+          document.documentElement.dataset.theme = storedTheme;
+        } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+          document.documentElement.dataset.theme = 'dark';
+        } else {
+          document.documentElement.dataset.theme = 'light';
+        }
+      } catch (error) {
+        console.warn('Unable to apply stored theme early', error);
+      }
+    </script>
     <link rel="stylesheet" href="assets/css/styles.css" />
     <link
       rel="preconnect"
@@ -24,6 +38,7 @@
         PRIVATE_TELEGRAM_ENABLED: true,
       };
     </script>
+    <script type="module" src="assets/js/theme.js" defer></script>
     <script type="module" src="assets/js/router.js" defer></script>
   </head>
   <body>
@@ -36,6 +51,18 @@
             <p class="sidebar__subtitle">کنترل‌پنل ربات</p>
           </div>
         </div>
+        <button
+          class="sidebar__theme-toggle"
+          type="button"
+          data-theme-toggle
+          aria-label="تغییر به حالت تیره"
+        >
+          <span class="sidebar__theme-toggle-icon" data-theme-icon>🌙</span>
+          <span class="sidebar__theme-toggle-label">
+            <span data-theme-label>حالت تیره</span>
+            <small data-theme-subtext>برای محیط‌های کم‌نور</small>
+          </span>
+        </button>
         <nav class="sidebar__nav" role="navigation">
           <a
             class="sidebar__link sidebar__link--dashboard"
