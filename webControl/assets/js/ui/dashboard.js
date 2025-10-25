@@ -59,6 +59,7 @@ function buildChart(container, metrics) {
   const labels = metrics.monthly.map((item) => item.month);
   const telegramData = metrics.monthly.map((item) => item.telegram);
   const whatsappData = metrics.monthly.map((item) => item.whatsapp);
+  const privateTelegramData = metrics.monthly.map((item) => item.privateTelegram ?? 0);
 
   chartInstance = new window.Chart(ctx, {
     type: 'bar',
@@ -69,6 +70,12 @@ function buildChart(container, metrics) {
           label: 'تلگرام',
           data: telegramData,
           backgroundColor: 'rgba(88, 101, 242, 0.7)',
+          borderRadius: 6,
+        },
+        {
+          label: 'تلگرام (شخصی)',
+          data: privateTelegramData,
+          backgroundColor: 'rgba(236, 72, 153, 0.6)',
           borderRadius: 6,
         },
         {
@@ -196,6 +203,7 @@ export async function mount(container) {
     statsGrid.append(
       renderStatsCard({ label: 'کل مکالمات', value: data.totals.all }),
       renderStatsCard({ label: 'تلگرام', value: data.totals.telegram }),
+      renderStatsCard({ label: 'تلگرام خصوصی', value: data.totals.privateTelegram ?? 0 }),
       renderStatsCard({ label: 'واتساپ', value: data.totals.whatsapp })
     );
 
@@ -269,6 +277,7 @@ export async function mount(container) {
     const platforms = data.status.platforms ?? {};
     [
       ['telegram', 'تلگرام'],
+      ['privateTelegram', 'تلگرام خصوصی'],
       ['whatsapp', 'واتساپ'],
     ].forEach(([key, label]) => {
       const wrapper = createElement('span', { classes: ['status-row__platform'] });

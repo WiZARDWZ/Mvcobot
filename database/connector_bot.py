@@ -1,9 +1,12 @@
 import json
-from datetime import time
+from datetime import datetime, time, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pyodbc
-from config import BOT_DB_CONFIG
+from config import BOT_DB_CONFIG, DB_CONFIG
+from utils.code_standardization import format_display_code, normalize_code
+
+_SPAM_GUARD_WINDOW_SECONDS = 2
 
 # def get_connection():
 #     conn_str = (
@@ -35,6 +38,133 @@ def get_connection():
         f"PWD={BOT_DB_CONFIG['password']};"
     )
     return pyodbc.connect(conn_str, timeout=30)
+
+
+def _open_inventory_connection() -> pyodbc.Connection:
+    cfg = DB_CONFIG
+    conn_str = (
+        f"DRIVER={cfg['driver']};"
+        f"SERVER={cfg['server']};"
+        f"DATABASE={cfg['database']};"
+        f"UID={cfg['user']};"
+        f"PWD={cfg['password']};"
+        "Encrypt=yes;TrustServerCertificate=yes;"
+    )
+    return pyodbc.connect(conn_str, timeout=30)
+
+
+def _fetch_part_names_from_inventory(
+    code_pairs: Iterable[Tuple[str, str]]
+) -> Dict[str, str]:
+    """Return part-name mapping for the provided codes without stock filters.
+
+    ``code_pairs`` must contain tuples of ``(code_norm, code_display)``. The
+    query intentionally uses ``LEFT JOIN`` and avoids any ``quantity`` filter so
+    that parts without stock still return their latest title.
+    """
+
+    unique_pairs: List[Tuple[str, str]] = []
+    seen: set[str] = set()
+    for norm, display in code_pairs:
+        norm_value = (norm or "").strip().upper()
+        display_value = (display or "").strip().upper()
+        key = norm_value or display_value.replace("-", "")
+        if not key:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_pairs.append((norm_value, display_value))
+
+    if not unique_pairs:
+        return {}
+
+    selects = " UNION ALL\n            ".join("SELECT ?, ?" for _ in unique_pairs)
+    params: List[str] = []
+    for norm_value, display_value in unique_pairs:
+        params.extend([norm_value, display_value])
+
+    primary_query = f"""
+        DECLARE @FiscalYear INT = (SELECT MAX(FiscalYearId) FROM FMK.FiscalYear);
+
+        WITH requested(code_norm, code_display) AS (
+            {selects}
+        ),
+        items AS (
+            SELECT
+                REPLACE(i.Code, '-', '') AS code_norm,
+                i.Code AS code_display,
+                i.Title AS part_name
+            FROM inv.vwItem AS i
+        ),
+        aggregated AS (
+            SELECT
+                req.code_norm,
+                req.code_display,
+                COALESCE(NULLIF(LTRIM(RTRIM(items.part_name)), ''), '-') AS part_name,
+                MAX(COALESCE(stock.Quantity, 0)) AS quantity
+            FROM requested AS req
+            LEFT JOIN items
+                ON items.code_norm = req.code_norm
+            LEFT JOIN inv.vwItemStockSummary AS stock
+                ON stock.ItemCode = items.code_display
+               AND stock.FiscalYearRef = @FiscalYear
+            GROUP BY
+                req.code_norm,
+                req.code_display,
+                COALESCE(NULLIF(LTRIM(RTRIM(items.part_name)), ''), '-')
+        )
+        SELECT code_norm, code_display, part_name
+        FROM aggregated
+    """
+
+    fallback_query = f"""
+        WITH requested(code_norm, code_display) AS (
+            {selects}
+        ),
+        items AS (
+            SELECT
+                REPLACE(i.Code, '-', '') AS code_norm,
+                i.Code AS code_display,
+                i.Title AS part_name
+            FROM inv.vwItem AS i
+        )
+        SELECT
+            req.code_norm,
+            req.code_display,
+            COALESCE(NULLIF(LTRIM(RTRIM(items.part_name)), ''), '-') AS part_name
+        FROM requested AS req
+        LEFT JOIN items
+            ON items.code_norm = req.code_norm
+    """
+
+    try:
+        with _open_inventory_connection() as conn:
+            cur = conn.cursor()
+            try:
+                rows = cur.execute(primary_query, *params).fetchall()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                rows = cur.execute(fallback_query, *params).fetchall()
+    except Exception:
+        return {}
+
+    result: Dict[str, str] = {}
+    for row in rows:
+        norm_value = (row[0] or "").strip().upper()
+        display_value = (row[1] or "").strip().upper()
+        part_name = (row[2] or "-").strip() or "-"
+        key = norm_value or display_value.replace("-", "")
+        if not key:
+            continue
+        if part_name == "-":
+            continue
+        result[key] = part_name
+
+    return result
 
 
 def _ensure_tables(cur) -> None:
@@ -92,6 +222,21 @@ def _ensure_tables(cur) -> None:
         WHEN NOT MATCHED THEN
             INSERT (day_of_week, open_time, close_time, is_closed, updated_at)
             VALUES (src.day_of_week, src.open_time, src.close_time, src.is_closed, GETDATE());
+        IF OBJECT_ID('platform_code_log', 'U') IS NULL
+        BEGIN
+            CREATE TABLE platform_code_log (
+                id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                platform NVARCHAR(50) NOT NULL,
+                code_norm NVARCHAR(10) NOT NULL,
+                code_display NVARCHAR(11) NOT NULL,
+                part_name NVARCHAR(255) NULL,
+                requested_at DATETIME2 NOT NULL DEFAULT (SYSUTCDATETIME())
+            );
+            CREATE INDEX IX_platform_code_log_requested_at
+                ON platform_code_log(requested_at);
+            CREATE INDEX IX_platform_code_log_code
+                ON platform_code_log(code_norm, platform);
+        END;
         """
     )
 
@@ -244,6 +389,343 @@ def log_whatsapp_message(chat_identifier: Optional[str], direction: str, text: s
         print("❌ خطا در log_whatsapp_message:", e)
 
 
+def record_code_request(
+    *,
+    platform: str,
+    code_norm: str,
+    code_display: str,
+    part_name: Optional[str],
+    requested_at: datetime,
+) -> None:
+    if not ensure_control_panel_tables():
+        raise RuntimeError("control panel tables are unavailable")
+
+    platform_value = (platform or "unknown").strip() or "unknown"
+    platform_value = platform_value[:50]
+    norm_value = (code_norm or "").strip().upper()[:10]
+    display_value = (code_display or "").strip().upper()[:11]
+    if not norm_value:
+        raise ValueError("code_norm is required")
+    if not display_value:
+        padded = norm_value.ljust(10, "X")[:10]
+        display_value = f"{padded[:5]}-{padded[5:]}"
+
+    name_value = (part_name or "-").strip() or "-"
+    name_value = name_value[:255]
+
+    timestamp = requested_at
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.astimezone(timezone.utc).replace(tzinfo=None)
+
+    guard_seconds = int(max(1, _SPAM_GUARD_WINDOW_SECONDS))
+    query = """
+        DECLARE @now DATETIME2 = ?;
+        DECLARE @platform NVARCHAR(50) = ?;
+        DECLARE @code_norm NVARCHAR(10) = ?;
+        DECLARE @code_display NVARCHAR(11) = ?;
+        DECLARE @part_name NVARCHAR(255) = ?;
+        DECLARE @guard_seconds INT = ?;
+
+        IF NOT EXISTS (
+            SELECT 1
+            FROM platform_code_log
+            WHERE platform = @platform
+              AND code_norm = @code_norm
+              AND requested_at >= DATEADD(SECOND, -@guard_seconds, @now)
+        )
+        BEGIN
+            INSERT INTO platform_code_log (platform, code_norm, code_display, part_name, requested_at)
+            VALUES (@platform, @code_norm, @code_display, @part_name, @now);
+        END
+        ELSE IF (
+            @part_name IS NOT NULL
+            AND LTRIM(RTRIM(@part_name)) <> ''
+            AND @part_name <> '-'
+        )
+        BEGIN
+            UPDATE platform_code_log
+            SET part_name = @part_name
+            WHERE id IN (
+                SELECT TOP (1) id
+                FROM platform_code_log
+                WHERE platform = @platform
+                  AND code_norm = @code_norm
+                  AND (
+                      part_name IS NULL
+                      OR part_name = '-'
+                      OR LTRIM(RTRIM(part_name)) = ''
+                  )
+                ORDER BY requested_at DESC, id DESC
+            );
+        END
+    """
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            query,
+            timestamp,
+            platform_value,
+            norm_value,
+            display_value,
+            name_value,
+            guard_seconds,
+        )
+        conn.commit()
+
+
+def _prepare_search_filter(search: Optional[str]) -> Optional[Tuple[str, str]]:
+    if search in (None, ""):
+        return None
+    normalized = normalize_code(str(search))
+    if len(normalized) < 7:
+        return None
+    if len(normalized) >= 10:
+        padded = normalized[:10]
+    else:
+        padded = normalized + ("X" * (10 - len(normalized)))
+    display = format_display_code(padded)
+    return padded, display
+
+
+def _resolve_code_range(range_key: str) -> Optional[datetime]:
+    key = (range_key or "1m").strip().lower()
+    if key in {"all", "کل", "0", "*"}:
+        return None
+
+    mapping = {
+        "1m": 30,
+        "2m": 60,
+        "3m": 90,
+        "6m": 180,
+        "1y": 365,
+    }
+
+    days = mapping.get(key)
+    if days is None:
+        days = mapping["1m"]
+    start = datetime.utcnow() - timedelta(days=days)
+    return start.replace(tzinfo=None)
+
+
+def fetch_code_statistics(
+    *,
+    range_key: str,
+    sort_order: str,
+    page: int,
+    page_size: int,
+    search: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], int]:
+    if not ensure_control_panel_tables():
+        raise RuntimeError("control panel tables are unavailable")
+
+    page = max(1, int(page or 1))
+    page_size = max(1, min(int(page_size or 20), 100))
+    offset = (page - 1) * page_size
+    order = "ASC" if (sort_order or "").lower().startswith("a") else "DESC"
+    start = _resolve_code_range(range_key)
+
+    params: List[Any] = []
+    filters: List[str] = []
+    if start is not None:
+        filters.append("requested_at >= ?")
+        params.append(start)
+
+    search_filter = _prepare_search_filter(search)
+    if search_filter:
+        filters.append("(code_norm = ? OR code_display = ?)")
+        params.extend(search_filter)
+
+    where_clause = ""
+    if filters:
+        where_clause = "WHERE " + " AND ".join(filters)
+
+    count_query = f"""
+        WITH filtered AS (
+            SELECT code_norm, code_display
+            FROM platform_code_log
+            {where_clause}
+        )
+        SELECT COUNT(*)
+        FROM (
+            SELECT code_norm, code_display
+            FROM filtered
+            GROUP BY code_norm, code_display
+        ) AS agg
+    """
+
+    data_query = f"""
+        WITH filtered AS (
+            SELECT platform, code_norm, code_display, part_name, requested_at
+            FROM platform_code_log
+            {where_clause}
+        ),
+        aggregated AS (
+            SELECT
+                code_norm,
+                code_display,
+                COUNT(*) AS request_count
+            FROM filtered
+            GROUP BY code_norm, code_display
+        ),
+        labeled AS (
+            SELECT
+                a.code_norm,
+                a.code_display,
+                a.request_count,
+                COALESCE(NULLIF(latest.part_name, ''), '-') AS part_name
+            FROM aggregated AS a
+            OUTER APPLY (
+                SELECT TOP 1 part_name
+                FROM filtered AS f
+                WHERE f.code_norm = a.code_norm
+                  AND f.code_display = a.code_display
+                ORDER BY
+                    CASE
+                        WHEN f.part_name IS NOT NULL
+                             AND LTRIM(RTRIM(f.part_name)) <> ''
+                             AND f.part_name <> '-' THEN 0
+                        ELSE 1
+                    END,
+                    f.requested_at DESC
+            ) AS latest
+        )
+        SELECT code_display, code_norm, part_name, request_count
+        FROM labeled
+        ORDER BY request_count {order}, code_display ASC
+        OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+    """
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        if params:
+            total_row = cur.execute(count_query, *params).fetchone()
+        else:
+            total_row = cur.execute(count_query).fetchone()
+        total = int(total_row[0]) if total_row else 0
+        exec_params = list(params)
+        exec_params.extend([offset, page_size])
+        rows = cur.execute(data_query, *exec_params).fetchall()
+
+    records: List[Dict[str, Any]] = []
+    for row in rows:
+        code_display, code_norm, part_name_value, count_value = row
+        records.append(
+            {
+                "code": str(code_display or ""),
+                "norm": str(code_norm or ""),
+                "part_name": (part_name_value or "-") or "-",
+                "request_count": int(count_value or 0),
+            }
+        )
+
+    missing_pairs: List[Tuple[str, str]] = []
+    for item in records:
+        name_value = str(item.get("part_name", "-")).strip()
+        if name_value and name_value != "-":
+            continue
+        norm_value = str(item.get("norm", "")).strip()
+        code_display = str(item.get("code", "")).strip()
+        if not norm_value and not code_display:
+            continue
+        missing_pairs.append((norm_value, code_display))
+
+    replacements = _fetch_part_names_from_inventory(missing_pairs)
+
+    if replacements:
+        for item in records:
+            norm_value = str(item.get("norm", "")).strip().upper()
+            code_display = str(item.get("code", "")).strip().upper()
+            lookup_key = norm_value or code_display.replace("-", "")
+            replacement = replacements.get(lookup_key)
+            if replacement:
+                item["part_name"] = replacement
+
+    items: List[Dict[str, Any]] = []
+    for item in records:
+        items.append(
+            {
+                "code": item["code"],
+                "part_name": item.get("part_name", "-"),
+                "request_count": item.get("request_count", 0),
+            }
+        )
+
+    return items, total
+
+
+def refresh_missing_code_names(limit: int = 250) -> int:
+    if not ensure_control_panel_tables():
+        raise RuntimeError("control panel tables are unavailable")
+
+    try:
+        safe_limit = int(limit)
+    except Exception:
+        safe_limit = 250
+    safe_limit = max(1, min(safe_limit, 1000))
+
+    missing_query = """
+        WITH missing AS (
+            SELECT
+                code_norm,
+                code_display,
+                MAX(requested_at) AS last_requested_at
+            FROM platform_code_log
+            WHERE part_name IS NULL
+               OR LTRIM(RTRIM(part_name)) = ''
+               OR part_name = '-'
+            GROUP BY code_norm, code_display
+        )
+        SELECT TOP (?) code_norm, code_display
+        FROM missing
+        ORDER BY last_requested_at DESC
+    """
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        rows = cur.execute(missing_query, safe_limit).fetchall()
+
+    if not rows:
+        return 0
+
+    pairs: List[Tuple[str, str]] = []
+    for row in rows:
+        norm_value = (row[0] or "").strip().upper()
+        display_value = (row[1] or "").strip().upper()
+        if not norm_value:
+            continue
+        pairs.append((norm_value, display_value))
+
+    replacements = _fetch_part_names_from_inventory(pairs)
+    if not replacements:
+        return 0
+
+    updated_rows = 0
+    update_query = """
+        UPDATE platform_code_log
+        SET part_name = ?
+        WHERE code_norm = ?
+          AND (
+              part_name IS NULL
+              OR part_name = '-'
+              OR LTRIM(RTRIM(part_name)) = ''
+          )
+    """
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        for norm_value, display_value in pairs:
+            key = norm_value or display_value.replace("-", "")
+            part_name = replacements.get(key)
+            if not part_name or part_name == "-":
+                continue
+            cur.execute(update_query, part_name, norm_value)
+            updated_rows += cur.rowcount or 0
+        conn.commit()
+
+    return int(updated_rows)
+
+
 def _serialize_details(details: Any) -> Optional[str]:
     if details is None:
         return None
@@ -273,12 +755,13 @@ def record_audit_event(message: str, *, actor: str = "کنترل‌پنل", deta
         conn.commit()
 
 
-def fetch_audit_log_entries(limit: int = 200) -> Tuple[List[dict], int]:
+def fetch_audit_log_entries(limit: int = 200, offset: int = 0) -> Tuple[List[dict], int]:
     if not ensure_control_panel_tables():
         raise RuntimeError("control panel tables are unavailable")
-    limit = max(1, min(limit, 500))
-    query = f"""
-        SELECT TOP {limit}
+    limit = max(1, min(int(limit or 0), 500))
+    offset = max(0, int(offset or 0))
+    base_query = """
+        SELECT
             id,
             [timestamp],
             actor,
@@ -287,11 +770,32 @@ def fetch_audit_log_entries(limit: int = 200) -> Tuple[List[dict], int]:
         FROM control_panel_audit_log
         ORDER BY [timestamp] DESC, id DESC
     """
+    paginated_query = base_query + " OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
     count_query = "SELECT COUNT(*) FROM control_panel_audit_log"
     entries: List[dict] = []
     with get_connection() as conn:
         cur = conn.cursor()
-        rows = cur.execute(query).fetchall()
+        try:
+            rows = cur.execute(paginated_query, offset, limit).fetchall()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            fetch_size = limit + offset
+            fallback_query = f"""
+                SELECT TOP {fetch_size}
+                    id,
+                    [timestamp],
+                    actor,
+                    message,
+                    details
+                FROM control_panel_audit_log
+                ORDER BY [timestamp] DESC, id DESC
+            """
+            rows = cur.execute(fallback_query).fetchall()
+            if offset:
+                rows = rows[offset:]
         total_row = cur.execute(count_query).fetchone()
     total = int(total_row[0]) if total_row else 0
     for row in rows:
@@ -354,11 +858,27 @@ def add_to_blacklist(user_id):
         uid = int(user_id)
     except:
         return
-    query = "IF NOT EXISTS (SELECT 1 FROM blacklist WHERE user_id=?) INSERT INTO blacklist(user_id) VALUES(?)"
+
+    insert_with_timestamp = (
+        "IF NOT EXISTS (SELECT 1 FROM blacklist WHERE user_id=?) "
+        "INSERT INTO blacklist(user_id, created_at) VALUES(?, GETDATE())"
+    )
+    insert_without_timestamp = (
+        "IF NOT EXISTS (SELECT 1 FROM blacklist WHERE user_id=?) "
+        "INSERT INTO blacklist(user_id) VALUES(?)"
+    )
+
     try:
         with get_connection() as conn:
             cur = conn.cursor()
-            cur.execute(query, uid, uid)
+            try:
+                cur.execute(insert_with_timestamp, uid, uid)
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                cur.execute(insert_without_timestamp, uid, uid)
             conn.commit()
     except Exception as e:
         print("❌ خطا در add_to_blacklist:", e)
@@ -391,16 +911,69 @@ def is_blacklisted(user_id) -> bool:
         print("❌ خطا در is_blacklisted:", e)
         return False
 
-def get_blacklist() -> List[int]:
-    query = "SELECT user_id FROM blacklist"
+def _coerce_iso(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        try:
+            return value.isoformat()
+        except Exception:
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+        return parsed.isoformat()
+    except Exception:
+        return text
+
+
+def get_blacklist_with_meta() -> List[Dict[str, Any]]:
+    query_with_created = (
+        "SELECT user_id, created_at FROM blacklist "
+        "ORDER BY created_at DESC, user_id DESC"
+    )
+    query_without_created = "SELECT user_id FROM blacklist ORDER BY user_id DESC"
+
     try:
         with get_connection() as conn:
             cur = conn.cursor()
-            rows = cur.execute(query).fetchall()
-            return [int(r[0]) for r in rows]
+            try:
+                rows = cur.execute(query_with_created).fetchall()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                rows = cur.execute(query_without_created).fetchall()
+                return [
+                    {"user_id": int(row[0]), "created_at": None}
+                    for row in rows
+                ]
+
+            result: List[Dict[str, Any]] = []
+            for row in rows:
+                user_value = row[0]
+                created_value = row[1] if len(row) > 1 else None
+                try:
+                    user_id = int(user_value)
+                except Exception:
+                    continue
+                result.append(
+                    {
+                        "user_id": user_id,
+                        "created_at": _coerce_iso(created_value),
+                    }
+                )
+            return result
     except Exception as e:
-        print("❌ خطا در get_blacklist:", e)
+        print("❌ خطا در get_blacklist_with_meta:", e)
         return []
+
+
+def get_blacklist() -> List[int]:
+    return [entry["user_id"] for entry in get_blacklist_with_meta()]
 
 def fetch_logs(user_id: int) -> List[dict]:
     """

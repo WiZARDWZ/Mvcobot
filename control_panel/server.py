@@ -6,8 +6,8 @@ import mimetypes
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
-from typing import Any, Callable, Dict, Optional, Tuple
-from urllib.parse import urlparse
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple
+from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 from http.server import ThreadingHTTPServer as _ThreadingHTTPServer
 
@@ -75,7 +75,7 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
         path = parsed.path or "/"
 
         if path.startswith("/api/"):
-            self._dispatch_get_api(path)
+            self._dispatch_get_api(parsed)
             return
 
         if path == "/" or path == "/index.html":
@@ -132,6 +132,11 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/v1/settings":
             self._handle_api(lambda: (HTTPStatus.OK, logic.update_settings(body)))
             return
+        if path == "/api/v1/private-telegram/settings":
+            self._handle_api(
+                lambda: (HTTPStatus.OK, logic.update_private_telegram_settings(body))
+            )
+            return
 
         if path.startswith("/api/v1/commands/"):
             command_id = path.rsplit("/", 1)[-1]
@@ -163,7 +168,20 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
     # endregion
 
     # region API dispatch
-    def _dispatch_get_api(self, path: str) -> None:
+    def _parse_positive_int(self, values: Sequence[str], default: int) -> int:
+        if not values:
+            return default
+        try:
+            value = int(str(values[0]).strip())
+        except Exception:
+            return default
+        if value <= 0:
+            return default
+        return value
+
+    def _dispatch_get_api(self, parsed) -> None:
+        path = parsed.path or "/"
+        query = parse_qs(parsed.query or "")
         if path == "/api/v1/metrics":
             self._handle_api(lambda: (HTTPStatus.OK, logic.get_metrics()))
         elif path == "/api/v1/commands":
@@ -172,6 +190,28 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
             self._handle_api(lambda: (HTTPStatus.OK, logic.get_blocklist()))
         elif path == "/api/v1/settings":
             self._handle_api(lambda: (HTTPStatus.OK, logic.get_settings()))
+        elif path == "/api/v1/private-telegram/settings":
+            self._handle_api(
+                lambda: (HTTPStatus.OK, logic.get_private_telegram_settings())
+            )
+        elif path == "/api/v1/code-stats":
+            page = self._parse_positive_int(query.get("page", ["1"]), 1)
+            page_size = self._parse_positive_int(query.get("pageSize", ["20"]), 20)
+            range_key = (query.get("range") or ["1m"])[0]
+            sort_order = (query.get("sort") or ["desc"])[0]
+            search_value = (query.get("search") or [""])[0]
+            self._handle_api(
+                lambda: (
+                    HTTPStatus.OK,
+                    logic.get_code_statistics(
+                        range_key=range_key,
+                        sort_order=sort_order,
+                        page=page,
+                        page_size=page_size,
+                        search=search_value,
+                    ),
+                )
+            )
         elif path == "/api/v1/audit-log":
             self._handle_api(lambda: (HTTPStatus.OK, logic.get_audit_log()))
         elif path == "/api/dm/settings":

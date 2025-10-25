@@ -1,7 +1,12 @@
 # handlers/wa_sync.py
+from typing import TYPE_CHECKING
+
 from telegram import Update
-from telegram.ext import ContextTypes, CommandHandler, Application
+from telegram.ext import ContextTypes, CommandHandler
 from wa.manager import wa_controller
+
+if TYPE_CHECKING:  # pragma: no cover - hints only
+    from telegram.ext import Application
 
 # اگر احراز هویت جدا دارید از همون استفاده کن
 try:
@@ -112,7 +117,7 @@ async def sync_set_changeover_hour(update: Update, context: ContextTypes.DEFAULT
         wa_controller.set_changeover_hour(hhmm)
         await update.message.reply_text("✅ ساعت سوئیچ متن تحویل در واتساپ تنظیم شد.")
 
-def register_wa_sync_handlers(app: Application):
+def register_wa_sync_handlers(app: "Application"):
     # استارت خودکار واتساپ همزمان با بوت ربات
     async def _start_wa(_):
         await wa_controller.start()

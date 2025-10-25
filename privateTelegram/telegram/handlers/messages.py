@@ -1,0 +1,449 @@
+# messages.py
+import re
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+from telethon import events
+from telethon.tl.custom import Message
+
+
+def _ensure_private_package() -> None:
+    import sys
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parents[2].parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+
+try:
+    from privateTelegram.telegram.client import (
+        client,
+        MAIN_GROUP_ID,
+        NEW_GROUP_ID,
+        ADMIN_GROUP_IDS,
+    )
+except ModuleNotFoundError:  # Legacy script-style execution
+    _ensure_private_package()
+    from privateTelegram.telegram.client import (
+        client,
+        MAIN_GROUP_ID,
+        NEW_GROUP_ID,
+        ADMIN_GROUP_IDS,
+    )
+
+try:
+    from privateTelegram.config.settings import settings
+except ModuleNotFoundError:
+    _ensure_private_package()
+    from privateTelegram.config.settings import settings
+
+try:
+    from privateTelegram.utils.time_checks import is_within_active_hours
+    from privateTelegram.utils import state as bot_state
+    from privateTelegram.utils.formatting import (
+        normalize_code,
+        standardize_code,
+        fix_part_number_display,
+        escape_markdown,
+    )
+except ModuleNotFoundError:
+    _ensure_private_package()
+    from privateTelegram.utils.time_checks import is_within_active_hours
+    from privateTelegram.utils import state as bot_state
+    from privateTelegram.utils.formatting import (
+        normalize_code,
+        standardize_code,
+        fix_part_number_display,
+        escape_markdown,
+    )
+
+try:
+    from privateTelegram.processor.finder import (
+        find_similar_products,
+        find_partial_matches,
+    )
+except ModuleNotFoundError:
+    _ensure_private_package()
+    from privateTelegram.processor.finder import (
+        find_similar_products,
+        find_partial_matches,
+    )
+
+try:
+    from privateTelegram.metrics.tracker import record_query
+except ModuleNotFoundError:
+    _ensure_private_package()
+    from privateTelegram.metrics.tracker import record_query  # type: ignore
+
+try:
+    from utils.code_tracker import record_code_lookup
+except ModuleNotFoundError:  # pragma: no cover - compatibility for standalone runs
+    _ensure_private_package()
+    from utils.code_tracker import record_code_lookup  # type: ignore
+
+TZ = ZoneInfo("Asia/Tehran")
+
+# ───────────────────────── Regex patterns ──────────────────────────
+FULL_PATTERN    = re.compile(r'^[A-Za-z0-9]{5}[-_/\. ]?[A-Za-z0-9]{5}$')
+PARTIAL_PATTERN = re.compile(r'^\d{5}[-_/\. ]?[A-Za-z0-9]{1,4}$')
+TOKEN_PATTERN   = re.compile(r'[A-Za-z0-9]{5}[-_/\. ]?[A-Za-z0-9]{1,5}')
+CLEAN_CTRL      = re.compile(r'[\u2066-\u2069\u200E-\u200F\u202A-\u202E\u200B]')
+
+# ───────────────────────── Config lists ────────────────────────────
+LISTEN_CHATS        = [MAIN_GROUP_ID, NEW_GROUP_ID] + ADMIN_GROUP_IDS
+ESCALATION_GROUP_ID = -4718450399  # شناسه گروه Escalation
+
+EXCLUDED = {
+    "موبیس", "موب", "mob", "mobis",
+    "korea", "china", "chin", "چین", "gen", "کد", "code"
+}
+
+# ────────────────────────── Main handler (Groups) ───────────────────────────
+@client.on(events.NewMessage(chats=LISTEN_CHATS))
+async def handle_new_message(event):
+    chat_id = event.chat_id
+    sender  = await event.get_sender()
+    user_id = sender.id
+    now_dt  = datetime.now(TZ)
+
+    # 1) Clean raw text
+    raw  = event.raw_text or ""
+    text = CLEAN_CTRL.sub("", raw).strip()
+
+    # 2) Blacklist
+    if user_id in settings.get("blacklist", []):
+        return
+
+    # 3) Per-user counter
+    counts = bot_state.user_query_counts.setdefault(
+        user_id, {"count": 0, "start": now_dt}
+    )
+
+    # 4) Group-level limits
+    if chat_id == MAIN_GROUP_ID and user_id not in ADMIN_GROUP_IDS:
+        if not is_within_active_hours():
+            return
+        if now_dt - counts["start"] >= timedelta(hours=24):
+            counts.update({"count": 0, "start": now_dt})
+        if counts["count"] >= settings.get("query_limit", 50):
+            return
+
+    # 5) Detect code-like tokens
+    raw_tokens = TOKEN_PATTERN.findall(text)
+    tokens     = [t for t in raw_tokens if re.search(r'\d', t)]
+
+    # helper to count valid words (letters only, excludes list)
+    def valid_word_count(s: str) -> int:
+        clean = re.sub(r'[^\w\sآ-ی]', ' ', s)
+        words = [w for w in clean.split() if re.fullmatch(r'[آ-یA-Za-z]+', w)]
+        return sum(1 for w in words if w.lower() not in EXCLUDED)
+
+    # 6) No tokens → forward immediately if ≥2 valid words
+    if not tokens:
+        if valid_word_count(text) >= 2:
+            await client.send_message(
+                ESCALATION_GROUP_ID,
+                f"🔔 پیام نامشخص از کاربر `{user_id}`:"
+            )
+            await client.forward_messages(
+                ESCALATION_GROUP_ID,
+                event.message,
+                chat_id
+            )
+        return
+
+    # 7) Tokens exist → strip each token then forward if leftover has ≥2 valid words
+    parts = re.split(r'\s+', text)
+    leftover = ' '.join(p for p in parts if p not in tokens)
+    if valid_word_count(leftover) >= 2:
+        await client.send_message(
+            ESCALATION_GROUP_ID,
+            f"🔔 پیام نامشخص از کاربر `{user_id}`:"
+        )
+        await client.forward_messages(
+            ESCALATION_GROUP_ID,
+            event.message,
+            chat_id
+        )
+
+    # 8) Handle look-ups for each token (logic unchanged)
+    for token in tokens:
+        norm = normalize_code(token)
+        code_std = standardize_code(token)
+
+        # 8a) Partial code
+        if PARTIAL_PATTERN.match(token):
+            bot_state.total_queries += 1
+            record_query(now_dt)
+            suggestions = find_partial_matches(norm)
+            if not suggestions:
+                if code_std:
+                    record_code_lookup(
+                        "privateTelegram",
+                        code_std,
+                        part_name=None,
+                        requested_at=now_dt,
+                    )
+                continue
+            full_code = suggestions[0]["product_code"]
+            disp_code = fix_part_number_display(full_code)
+            await client.send_message(
+                user_id,
+                f"🔍 آیا منظور شما {disp_code} است؟!"
+            )
+
+            norm_full = normalize_code(full_code)
+            prods = find_similar_products(norm_full)
+            if prods:
+                if user_id not in ADMIN_GROUP_IDS:
+                    counts["count"] += 1
+                bot_state.sent_messages[f"{user_id}:{norm_full}"] = now_dt
+                if code_std:
+                    record_code_lookup(
+                        "privateTelegram",
+                        code_std,
+                        part_name=prods[0].get("name") or prods[0].get("نام کالا") or None,
+                        requested_at=now_dt,
+                    )
+                for p in prods:
+                    _send_product(user_id, p, now_dt)
+            elif code_std:
+                record_code_lookup(
+                    "privateTelegram",
+                    code_std,
+                    part_name=None,
+                    requested_at=now_dt,
+                )
+
+        # 8b) Full code
+        elif FULL_PATTERN.match(token):
+            bot_state.total_queries += 1
+            record_query(now_dt)
+            key = f"{user_id}:{norm}"
+            if chat_id == MAIN_GROUP_ID and user_id not in ADMIN_GROUP_IDS:
+                last = bot_state.sent_messages.get(key)
+                if last and now_dt - last < timedelta(minutes=30):
+                    if code_std:
+                        record_code_lookup(
+                            "privateTelegram",
+                            code_std,
+                            part_name=None,
+                            requested_at=now_dt,
+                        )
+                    continue
+            if user_id not in ADMIN_GROUP_IDS:
+                counts["count"] += 1
+            bot_state.sent_messages[key] = now_dt
+            prods = find_similar_products(norm)
+            if prods:
+                if code_std:
+                    record_code_lookup(
+                        "privateTelegram",
+                        code_std,
+                        part_name=prods[0].get("name") or prods[0].get("نام کالا") or None,
+                        requested_at=now_dt,
+                    )
+                for p in prods:
+                    _send_product(user_id, p, now_dt)
+            elif code_std:
+                record_code_lookup(
+                    "privateTelegram",
+                    code_std,
+                    part_name=None,
+                    requested_at=now_dt,
+                )
+
+# ────────────────────────── New handler (Private Messages) ───────────────────────────
+@client.on(events.NewMessage(incoming=True))
+async def handle_private_message(event):
+    """
+    پاسخ‌گویی خودکار در پیام‌های خصوصی کاربران بر اساس همان منطق گروه.
+    با کلید settings['dm_enabled'] قابل فعال/غیرفعال‌شدن است.
+    """
+    if not event.is_private:
+        return
+    if not settings.get("dm_enabled", True):
+        # پاسخ‌گویی PM خاموش است
+        return
+
+    sender = await event.get_sender()
+    user_id = sender.id
+    chat_id = event.chat_id  # در PM برابر با user_id است
+    now_dt  = datetime.now(TZ)
+
+    # Clean & blacklist
+    raw  = event.raw_text or ""
+    text = CLEAN_CTRL.sub("", raw).strip()
+    if user_id in settings.get("blacklist", []):
+        return
+
+    # Per-user counter (24h window)
+    counts = bot_state.user_query_counts.setdefault(
+        user_id, {"count": 0, "start": now_dt}
+    )
+    if not is_within_active_hours() and user_id not in ADMIN_GROUP_IDS:
+        return
+    if now_dt - counts["start"] >= timedelta(hours=24):
+        counts.update({"count": 0, "start": now_dt})
+    if counts["count"] >= settings.get("query_limit", 50) and user_id not in ADMIN_GROUP_IDS:
+        return
+
+    # Extract tokens
+    raw_tokens = TOKEN_PATTERN.findall(text)
+    tokens     = [t for t in raw_tokens if re.search(r'\d', t)]
+
+    def valid_word_count(s: str) -> int:
+        clean = re.sub(r'[^\w\sآ-ی]', ' ', s)
+        words = [w for w in clean.split() if re.fullmatch(r'[آ-یA-Za-z]+', w)]
+        return sum(1 for w in words if w.lower() not in EXCLUDED)
+
+    # Forward unknown PMs with context to گروه Escalation
+    if not tokens:
+        if valid_word_count(text) >= 2:
+            await client.send_message(
+                ESCALATION_GROUP_ID,
+                f"🔔 پیام خصوصی نامشخص از کاربر `{user_id}`:"
+            )
+            await client.forward_messages(
+                ESCALATION_GROUP_ID,
+                event.message,
+                chat_id
+            )
+        return
+
+    parts = re.split(r'\s+', text)
+    leftover = ' '.join(p for p in parts if p not in tokens)
+    if valid_word_count(leftover) >= 2:
+        await client.send_message(
+            ESCALATION_GROUP_ID,
+            f"🔔 پیام خصوصی نامشخص از کاربر `{user_id}`:"
+        )
+        await client.forward_messages(
+            ESCALATION_GROUP_ID,
+            event.message,
+            chat_id
+        )
+
+    # Lookup logic (partial / full)
+    for token in tokens:
+        norm = normalize_code(token)
+        code_std = standardize_code(token)
+
+        # Partial code in PM
+        if PARTIAL_PATTERN.match(token):
+            bot_state.total_queries += 1
+            record_query(now_dt)
+            suggestions = find_partial_matches(norm)
+            if not suggestions:
+                if code_std:
+                    record_code_lookup(
+                        "privateTelegram",
+                        code_std,
+                        part_name=None,
+                        requested_at=now_dt,
+                    )
+                continue
+
+            full_code = suggestions[0]["product_code"]
+            disp_code = fix_part_number_display(full_code)
+            await client.send_message(
+                user_id,
+                f"🔍 آیا منظور شما {disp_code} است؟!"
+            )
+
+            norm_full = normalize_code(full_code)
+            prods = find_similar_products(norm_full)
+            if prods:
+                if user_id not in ADMIN_GROUP_IDS:
+                    counts["count"] += 1
+                bot_state.sent_messages[f"{user_id}:{norm_full}"] = now_dt
+                if code_std:
+                    record_code_lookup(
+                        "privateTelegram",
+                        code_std,
+                        part_name=prods[0].get("name") or prods[0].get("نام کالا") or None,
+                        requested_at=now_dt,
+                    )
+                for p in prods:
+                    _send_product(user_id, p, now_dt)
+            elif code_std:
+                record_code_lookup(
+                    "privateTelegram",
+                    code_std,
+                    part_name=None,
+                    requested_at=now_dt,
+                )
+
+        # Full code in PM
+        elif FULL_PATTERN.match(token):
+            bot_state.total_queries += 1
+            record_query(now_dt)
+            key = f"{user_id}:{norm}"
+            if user_id not in ADMIN_GROUP_IDS:
+                last = bot_state.sent_messages.get(key)
+                if last and now_dt - last < timedelta(minutes=30):
+                    if code_std:
+                        record_code_lookup(
+                            "privateTelegram",
+                            code_std,
+                            part_name=None,
+                            requested_at=now_dt,
+                        )
+                    # جلوگیری از ارسال تکراری ظرف ۳۰ دقیقه
+                    continue
+                counts["count"] += 1
+
+            bot_state.sent_messages[key] = now_dt
+            prods = find_similar_products(norm)
+            if prods:
+                if code_std:
+                    record_code_lookup(
+                        "privateTelegram",
+                        code_std,
+                        part_name=prods[0].get("name") or prods[0].get("نام کالا") or None,
+                        requested_at=now_dt,
+                    )
+                for p in prods:
+                    _send_product(user_id, p, now_dt)
+            elif code_std:
+                record_code_lookup(
+                    "privateTelegram",
+                    code_std,
+                    part_name=None,
+                    requested_at=now_dt,
+                )
+
+# ─────────────────────── Helper to send product ────────────────────
+def _send_product(user_id: int, p: dict, now_dt: datetime) -> None:
+    code_md  = escape_markdown(fix_part_number_display(p["product_code"]), 1)
+    brand_md = escape_markdown(p["brand"], 1)
+    name_md  = escape_markdown(p["name"], 1)
+
+    try:
+        val = int(float(p.get("price", p.get("فی فروش", 0))))
+        price_str = f"{val:,} ریال"
+    except:
+        price_str = str(p.get("price", p.get("فی فروش", 0)))
+    price_md = escape_markdown(price_str, 1)
+
+    iran_txt  = p.get("iran_code") or ""
+    iran_line = f"توضیحات: {escape_markdown(iran_txt,1)}\n" if iran_txt else ""
+
+    change_t = datetime.strptime(settings["changeover_hour"], "%H:%M").time()
+    footer   = (
+        settings["delivery_info"]["before_15"]
+        if now_dt.time() < change_t
+        else settings["delivery_info"]["after_15"]
+    )
+
+    msg = (
+        f"کد: `{code_md}`\n"
+        f"برند: {brand_md}\n"
+        f"نام کالا: {name_md}\n"
+        f"قیمت: {price_md}\n"
+        f"{iran_line}\n{footer}"
+    )
+    client.loop.create_task(
+        client.send_message(user_id, msg, parse_mode="markdown")
+    )
