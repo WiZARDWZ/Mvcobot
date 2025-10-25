@@ -68,7 +68,11 @@ export async function mount(container) {
 
   const loadingState = createLoadingState('در حال دریافت لیست...');
 
-  container.append(toolbar, table.wrapper, loadingState);
+  const layout = createElement('div', { classes: ['page-layout'] });
+  const blocklistCard = createElement('section', { classes: ['card'] });
+  blocklistCard.append(toolbar, table.wrapper, loadingState);
+  layout.append(blocklistCard);
+  container.append(layout);
 
   const searchInput = toolbar.querySelector('input[type="search"]');
   let entries = [];

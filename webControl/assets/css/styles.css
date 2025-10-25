@@ -150,11 +150,11 @@ textarea:focus-visible {
 }
 
 .sidebar__footer-label {
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: rgba(248, 250, 252, 0.55);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: rgba(248, 250, 252, 0.72);
 }
 
 .sidebar__footer-link {
@@ -197,16 +197,43 @@ textarea:focus-visible {
   align-items: center;
   gap: 8px;
   font-weight: 500;
-  transition: background-color var(--transition-base), transform var(--transition-base);
+  position: relative;
+  overflow: hidden;
+  transition: color var(--transition-base), transform var(--transition-base);
+}
+
+.sidebar__link::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-md);
+  background: linear-gradient(120deg, rgba(88, 101, 242, 0.4), rgba(59, 130, 246, 0.35));
+  opacity: 0;
+  transform: translateX(12px);
+  transition: opacity var(--transition-base), transform var(--transition-base);
 }
 
 .sidebar__link:hover {
-  background-color: rgba(248, 250, 252, 0.1);
+  color: #ffffff;
+}
+
+.sidebar__link:hover::before {
+  opacity: 0.6;
+  transform: translateX(0);
 }
 
 .sidebar__link.is-active {
-  background-color: rgba(88, 101, 242, 0.16);
   color: #fff;
+}
+
+.sidebar__link.is-active::before {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.sidebar__link > span {
+  position: relative;
+  z-index: 1;
 }
 
 .main-content {
@@ -265,6 +292,18 @@ textarea:focus-visible {
   min-height: 520px;
   display: flex;
   flex-direction: column;
+  gap: var(--space-3);
+}
+
+.page-layout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.page-layout--grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: var(--space-3);
 }
 
@@ -678,33 +717,6 @@ textarea:focus-visible {
   gap: 6px;
 }
 
-.developer-card {
-  grid-column: span 6;
-  justify-content: space-between;
-}
-
-.developer-card__body {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  align-items: flex-start;
-}
-
-.developer-card__name {
-  margin: 0;
-  font-weight: 700;
-}
-
-.developer-card__link {
-  color: var(--color-primary);
-  font-weight: 600;
-  text-decoration: none;
-}
-
-.developer-card__link:hover {
-  text-decoration: underline;
-}
-
 .badge {
   display: inline-flex;
   align-items: center;
@@ -902,8 +914,7 @@ tbody tr:nth-of-type(odd) {
   }
 
   .cache-card,
-  .rate-card,
-  .developer-card {
+  .rate-card {
     grid-column: span 6;
   }
 }
@@ -940,7 +951,6 @@ tbody tr:nth-of-type(odd) {
 
   .cache-card,
   .rate-card,
-  .developer-card,
   .status-card,
   .hours-card {
     grid-column: span 12;

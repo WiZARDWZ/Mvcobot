@@ -349,20 +349,7 @@ export async function mount(container) {
   const hoursListWrapper = createElement('div', { classes: ['hours-card__list'] });
   hoursCard.append(hoursTitle, hoursTimezone, hoursListWrapper);
 
-  const developerCard = createElement('section', { classes: ['card', 'developer-card'] });
-  const developerTitle = createElement('h4', { classes: ['card__title'], text: 'امضای توسعه‌دهنده' });
-  const developerBody = createElement('div', { classes: ['developer-card__body'] });
-  developerBody.append(
-    createElement('p', { classes: ['developer-card__name'], text: 'Mohammad Baghshomali' }),
-    createElement('a', {
-      classes: ['developer-card__link'],
-      attrs: { href: 'https://mbaghshomali.ir', target: '_blank', rel: 'noopener' },
-      text: 'mbaghshomali.ir',
-    })
-  );
-  developerCard.append(developerTitle, developerBody);
-
-  layout.append(statsGrid, analyticsCard, statusCard, cacheCard, rateCard, hoursCard, developerCard);
+  layout.append(statsGrid, analyticsCard, statusCard, cacheCard, rateCard, hoursCard);
   container.append(header, layout);
 
   const loadingState = createLoadingState();

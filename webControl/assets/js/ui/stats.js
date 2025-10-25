@@ -193,7 +193,11 @@ export async function mount(container) {
   });
   pagination.append(prevButton, pageInfo, nextButton);
 
-  container.append(heading, filterBar, table.wrapper, pagination, loadingState);
+  const layout = createElement('div', { classes: ['page-layout'] });
+  const statsCard = createElement('section', { classes: ['card'] });
+  statsCard.append(heading, filterBar, table.wrapper, pagination, loadingState);
+  layout.append(statsCard);
+  container.append(layout);
 
   let currentPage = 1;
   const pageSize = 20;
