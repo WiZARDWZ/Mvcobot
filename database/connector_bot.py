@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import pyodbc
 from config import BOT_DB_CONFIG, DB_CONFIG
 from utils.code_standardization import normalize_code
+from .panel_inventory import build_part_name_map, process_data
 
 LOGGER = logging.getLogger(__name__)
 
@@ -37,9 +38,12 @@ _TOKEN_SPLIT_PATTERN = re.compile(r"[\s\-_/]+")
 
 _INVENTORY_ITEMS_QUERY = """
     SELECT
-        i.Code AS code_display,
-        REPLACE(i.Code, '-', '') AS code_norm,
-        COALESCE(NULLIF(LTRIM(RTRIM(i.Title)), ''), '-') AS part_name
+        i.Code AS [کد کالا],
+        i.iranCode AS [Iran Code],
+        i.Title AS [نام کالا],
+        i.UnitTitle AS [واحد سنجش],
+        i.SaleGroupTitle AS [گروه فروش],
+        p.PropertyAmount1 AS [مشخصات کالا]
     FROM inv.vwItem AS i
     LEFT JOIN inv.vwItemPropertyAmount AS p
         ON i.ItemID = p.ItemRef
@@ -552,23 +556,39 @@ def _record_matches_tokens(
 
 
 def _load_inventory_name_map() -> Dict[str, str]:
-    with _open_inventory_connection() as conn:
-        cur = conn.cursor()
-        rows = cur.execute(_INVENTORY_ITEMS_QUERY).fetchall()
+    try:
+        with _open_inventory_connection() as conn:
+            cur = conn.cursor()
+            rows = cur.execute(_INVENTORY_ITEMS_QUERY).fetchall()
+            columns = [column[0] for column in cur.description] if cur.description else []
+    except Exception:
+        LOGGER.exception("Failed to fetch inventory items for control panel")
+        return {}
 
-    mapping: Dict[str, str] = {}
+    raw_rows: List[Dict[str, Any]] = []
+    if not columns:
+        columns = [
+            "کد کالا",
+            "Iran Code",
+            "نام کالا",
+            "واحد سنجش",
+            "گروه فروش",
+            "مشخصات کالا",
+        ]
     for row in rows:
-        display_value = (row[0] or "").strip()
-        norm_value = (row[1] or "").strip()
-        part_name = (row[2] or "").strip()
-        if (not display_value and not norm_value) or not part_name or part_name == "-":
-            continue
+        entry: Dict[str, Any] = {}
+        for idx, column in enumerate(columns):
+            if idx >= len(row):
+                break
+            entry[column] = row[idx]
+        raw_rows.append(entry)
 
-        norm_key = norm_value.upper() or normalize_code(display_value).upper()
-        if norm_key:
-            mapping[norm_key] = part_name
+    processed_records = process_data(raw_rows)
+    mapping = build_part_name_map(processed_records)
 
-    LOGGER.debug("Loaded %d inventory part names", len(mapping))
+    LOGGER.debug(
+        "Loaded %d inventory part names from %d records", len(mapping), len(processed_records)
+    )
     return mapping
 
 
