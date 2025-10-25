@@ -643,21 +643,21 @@ def fetch_code_statistics(
 
     if search_tokens:
         code_expr = (
-            "UPPER(CONCAT(N' ', REPLACE(REPLACE(REPLACE(platform_code_log.code_display, '-', N' '), '/', N' '), N'_', N' ')))"
+            "UPPER(N' ' + REPLACE(REPLACE(REPLACE(platform_code_log.code_display, '-', N' '), '/', N' '), N'_', N' '))"
         )
         name_expr = (
-            "UPPER(CONCAT(N' ', REPLACE(REPLACE(REPLACE(COALESCE(platform_code_log.part_name, N''), '-', N' '), '/', N' '), N'_', N' ')))"
+            "UPPER(N' ' + REPLACE(REPLACE(REPLACE(COALESCE(platform_code_log.part_name, N''), '-', N' '), '/', N' '), N'_', N' '))"
         )
         token_clauses: List[str] = []
         for raw_token, normalized_token in search_tokens:
             clause_parts = [
-                f"{code_expr} LIKE UPPER(CONCAT(N'% ', ?, N'%'))",
-                f"{name_expr} LIKE UPPER(CONCAT(N'% ', ?, N'%'))",
+                f"{code_expr} LIKE UPPER(N'% ' + CAST(? AS NVARCHAR(200)) + N'%')",
+                f"{name_expr} LIKE UPPER(N'% ' + CAST(? AS NVARCHAR(200)) + N'%')",
             ]
             params.extend([raw_token, raw_token])
             if normalized_token:
                 clause_parts.append(
-                    "UPPER(platform_code_log.code_norm) LIKE UPPER(CONCAT(?, N'%'))"
+                    "UPPER(platform_code_log.code_norm) LIKE UPPER(CAST(? AS NVARCHAR(50)) + N'%')"
                 )
                 params.append(normalized_token)
             token_clauses.append("(" + " OR ".join(clause_parts) + ")")
