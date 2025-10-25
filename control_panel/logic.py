@@ -18,7 +18,7 @@ from database.connector_bot import (
     get_blacklist_with_meta,
     get_connection,
     get_setting,
-    refresh_missing_code_names,
+    get_inventory_name_map,
     record_audit_event,
     remove_from_blacklist,
     save_working_hours_entries,
@@ -850,24 +850,25 @@ def get_code_statistics(
 
 def refresh_code_stat_names(*, limit: Optional[int] = None) -> Dict[str, Any]:
     try:
-        safe_limit = int(limit) if limit is not None else 250
+        safe_limit = int(limit) if limit is not None else None
     except Exception:
-        safe_limit = 250
-    safe_limit = max(1, min(safe_limit, 1000))
+        safe_limit = None
 
     try:
-        updated = refresh_missing_code_names(limit=safe_limit)
+        mapping = get_inventory_name_map(refresh=True)
     except Exception as exc:
-        LOGGER.warning("Failed to refresh code part names: %s", exc)
+        LOGGER.warning("Failed to refresh inventory name map: %s", exc)
         raise ControlPanelError("بازخوانی نام قطعه‌ها با خطا مواجه شد.", status=500)
 
+    updated = len(mapping)
     if updated > 0:
         _append_audit_event(
             "بازخوانی نام قطعه‌ها",
-            details=f"{updated} رکورد",
+            details=f"{updated:,} نام",
         )
 
-    return {"updated": int(updated), "limit": safe_limit}
+    limit_value = safe_limit if safe_limit is not None else updated
+    return {"updated": int(updated), "limit": limit_value}
 
 
 def get_commands() -> List[Dict[str, Any]]:

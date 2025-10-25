@@ -910,6 +910,28 @@ tbody tr:nth-of-type(odd) {
   letter-spacing: 0.05em;
 }
 
+.code-chip--interactive {
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.code-chip--interactive:hover,
+.code-chip--interactive:focus {
+  background-color: #c7d2fe;
+  color: #312e81;
+}
+
+.code-chip--interactive:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.code-chip--empty {
+  background-color: #e5e7eb;
+  color: #6b7280;
+}
+
 .pagination__info {
   font-size: 14px;
   color: var(--color-text-muted);

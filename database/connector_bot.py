@@ -1,10 +1,14 @@
 import json
+import logging
+import re
 from datetime import datetime, time, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pyodbc
 from config import BOT_DB_CONFIG, DB_CONFIG
-from utils.code_standardization import format_display_code, normalize_code
+from utils.code_standardization import normalize_code
+
+LOGGER = logging.getLogger(__name__)
 
 _SPAM_GUARD_WINDOW_SECONDS = 2
 
@@ -27,6 +31,23 @@ _DEFAULT_WORKING_HOURS: List[Dict[str, Any]] = [
     {"day": 5, "open": "09:00", "close": "18:00", "closed": False},  # Saturday
     {"day": 6, "open": "09:00", "close": "18:00", "closed": False},  # Sunday
 ]
+
+_MAX_SEARCH_TOKENS = 5
+_TOKEN_SPLIT_PATTERN = re.compile(r"[\s\-_/]+")
+
+_INVENTORY_ITEMS_QUERY = """
+    SELECT
+        i.Code AS code_display,
+        REPLACE(i.Code, '-', '') AS code_norm,
+        COALESCE(NULLIF(LTRIM(RTRIM(i.Title)), ''), '-') AS part_name
+    FROM inv.vwItem AS i
+    LEFT JOIN inv.vwItemPropertyAmount AS p
+        ON i.ItemID = p.ItemRef
+    WHERE i.Type = 1
+    ORDER BY i.Code
+"""
+
+_inventory_name_cache: Dict[str, str] = {}
 
 
 def get_connection():
@@ -474,18 +495,91 @@ def record_code_request(
         conn.commit()
 
 
-def _prepare_search_filter(search: Optional[str]) -> Optional[Tuple[str, str]]:
-    if search in (None, ""):
-        return None
-    normalized = normalize_code(str(search))
-    if len(normalized) < 7:
-        return None
-    if len(normalized) >= 10:
-        padded = normalized[:10]
-    else:
-        padded = normalized + ("X" * (10 - len(normalized)))
-    display = format_display_code(padded)
-    return padded, display
+def _prepare_search_tokens(search: Optional[str]) -> List[Tuple[str, str]]:
+    if not search:
+        return []
+
+    tokens: List[Tuple[str, str]] = []
+    seen: set[str] = set()
+    for raw in re.split(r"\s+", str(search)):
+        token = raw.strip()
+        if not token:
+            continue
+        upper_token = token.upper()
+        if upper_token in seen:
+            continue
+        seen.add(upper_token)
+        normalized = normalize_code(token).upper()
+        tokens.append((upper_token, normalized))
+        if len(tokens) >= _MAX_SEARCH_TOKENS:
+            break
+    return tokens
+
+
+def _split_words(value: str) -> List[str]:
+    if not value:
+        return []
+    cleaned = _TOKEN_SPLIT_PATTERN.sub(" ", str(value).upper())
+    return [segment for segment in cleaned.split() if segment]
+
+
+def _token_matches_text(token: str, text: str) -> bool:
+    if not token or not text:
+        return False
+    for segment in _split_words(text):
+        if segment.startswith(token):
+            return True
+    return False
+
+
+def _record_matches_tokens(
+    tokens: Iterable[Tuple[str, str]],
+    *,
+    code_display: str,
+    code_norm: str,
+    part_name: str,
+) -> bool:
+    upper_norm = (code_norm or "").upper()
+    for raw_token, normalized_token in tokens:
+        if _token_matches_text(raw_token, code_display):
+            continue
+        if normalized_token and upper_norm.startswith(normalized_token):
+            continue
+        if _token_matches_text(raw_token, part_name):
+            continue
+        return False
+    return True
+
+
+def _load_inventory_name_map() -> Dict[str, str]:
+    with _open_inventory_connection() as conn:
+        cur = conn.cursor()
+        rows = cur.execute(_INVENTORY_ITEMS_QUERY).fetchall()
+
+    mapping: Dict[str, str] = {}
+    for row in rows:
+        display_value = (row[0] or "").strip()
+        norm_value = (row[1] or "").strip()
+        part_name = (row[2] or "").strip()
+        if (not display_value and not norm_value) or not part_name or part_name == "-":
+            continue
+
+        norm_key = norm_value.upper() or normalize_code(display_value).upper()
+        if norm_key:
+            mapping[norm_key] = part_name
+
+    LOGGER.debug("Loaded %d inventory part names", len(mapping))
+    return mapping
+
+
+def get_inventory_name_map(*, refresh: bool = False) -> Dict[str, str]:
+    global _inventory_name_cache
+
+    if refresh or not _inventory_name_cache:
+        mapping = _load_inventory_name_map()
+        _inventory_name_cache = mapping
+
+    return dict(_inventory_name_cache)
 
 
 def _resolve_code_range(range_key: str) -> Optional[datetime]:
@@ -519,6 +613,12 @@ def fetch_code_statistics(
     if not ensure_control_panel_tables():
         raise RuntimeError("control panel tables are unavailable")
 
+    try:
+        inventory_map = get_inventory_name_map()
+    except Exception:
+        LOGGER.debug("Unable to load inventory name cache", exc_info=True)
+        inventory_map = {}
+
     page = max(1, int(page or 1))
     page_size = max(1, min(int(page_size or 20), 100))
     offset = (page - 1) * page_size
@@ -531,10 +631,47 @@ def fetch_code_statistics(
         filters.append("requested_at >= ?")
         params.append(start)
 
-    search_filter = _prepare_search_filter(search)
-    if search_filter:
-        filters.append("(code_norm = ? OR code_display = ?)")
-        params.extend(search_filter)
+    search_tokens = _prepare_search_tokens(search)
+    name_code_matches: List[str] = []
+    if search_tokens and inventory_map:
+        for norm_code, part_name in inventory_map.items():
+            if all(_token_matches_text(raw_token, part_name) for raw_token, _ in search_tokens):
+                name_code_matches.append(norm_code)
+        # keep the IN clause reasonably small
+        if len(name_code_matches) > 500:
+            name_code_matches = name_code_matches[:500]
+
+    if search_tokens:
+        code_expr = (
+            "UPPER(N' ' + REPLACE(REPLACE(REPLACE(platform_code_log.code_display, '-', N' '), '/', N' '), N'_', N' '))"
+        )
+        name_expr = (
+            "UPPER(N' ' + REPLACE(REPLACE(REPLACE(COALESCE(platform_code_log.part_name, N''), '-', N' '), '/', N' '), N'_', N' '))"
+        )
+        token_clauses: List[str] = []
+        for raw_token, normalized_token in search_tokens:
+            clause_parts = [
+                f"{code_expr} LIKE UPPER(N'% ' + CAST(? AS NVARCHAR(200)) + N'%')",
+                f"{name_expr} LIKE UPPER(N'% ' + CAST(? AS NVARCHAR(200)) + N'%')",
+            ]
+            params.extend([raw_token, raw_token])
+            if normalized_token:
+                clause_parts.append(
+                    "UPPER(platform_code_log.code_norm) LIKE UPPER(CAST(? AS NVARCHAR(50)) + N'%')"
+                )
+                params.append(normalized_token)
+            token_clauses.append("(" + " OR ".join(clause_parts) + ")")
+
+        combined_clause = "(" + " AND ".join(token_clauses) + ")" if token_clauses else ""
+        clause_options: List[str] = []
+        if combined_clause:
+            clause_options.append(combined_clause)
+        if name_code_matches:
+            placeholders = ", ".join("?" for _ in name_code_matches)
+            clause_options.append(f"platform_code_log.code_norm IN ({placeholders})")
+        if clause_options:
+            filters.append("(" + " OR ".join(clause_options) + ")")
+            params.extend(name_code_matches)
 
     where_clause = ""
     if filters:
@@ -542,21 +679,7 @@ def fetch_code_statistics(
 
     count_query = f"""
         WITH filtered AS (
-            SELECT code_norm, code_display
-            FROM platform_code_log
-            {where_clause}
-        )
-        SELECT COUNT(*)
-        FROM (
-            SELECT code_norm, code_display
-            FROM filtered
-            GROUP BY code_norm, code_display
-        ) AS agg
-    """
-
-    data_query = f"""
-        WITH filtered AS (
-            SELECT platform, code_norm, code_display, part_name, requested_at
+            SELECT code_norm, code_display, part_name, requested_at, platform
             FROM platform_code_log
             {where_clause}
         ),
@@ -593,56 +716,71 @@ def fetch_code_statistics(
         SELECT code_display, code_norm, part_name, request_count
         FROM labeled
         ORDER BY request_count {order}, code_display ASC
-        OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+        {{pagination_clause}}
     """
 
     with get_connection() as conn:
         cur = conn.cursor()
-        if params:
-            total_row = cur.execute(count_query, *params).fetchone()
-        else:
-            total_row = cur.execute(count_query).fetchone()
-        total = int(total_row[0]) if total_row else 0
+        pagination_clause = ""
         exec_params = list(params)
-        exec_params.extend([offset, page_size])
-        rows = cur.execute(data_query, *exec_params).fetchall()
+
+        if not search_tokens:
+            if params:
+                total_row = cur.execute(count_query, *params).fetchone()
+            else:
+                total_row = cur.execute(count_query).fetchone()
+            total = int(total_row[0]) if total_row else 0
+            pagination_clause = "OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+            exec_params.extend([offset, page_size])
+        else:
+            total = 0
+
+        final_query = data_query.format(pagination_clause=pagination_clause)
+        rows = cur.execute(final_query, *exec_params).fetchall()
 
     records: List[Dict[str, Any]] = []
     for row in rows:
         code_display, code_norm, part_name_value, count_value = row
+        code_display_text = str(code_display or "").strip()
+        code_norm_text = str(code_norm or "").strip().upper()
+        normalized_code = code_norm_text or normalize_code(code_display_text).upper()
+        mapped_name = inventory_map.get(normalized_code, "") if normalized_code else ""
+        part_name_text = str(part_name_value or "").strip()
+        final_name = mapped_name or part_name_text or "-"
         records.append(
             {
-                "code": str(code_display or ""),
-                "norm": str(code_norm or ""),
-                "part_name": (part_name_value or "-") or "-",
+                "code": code_display_text,
+                "norm": normalized_code,
+                "part_name": final_name,
                 "request_count": int(count_value or 0),
             }
         )
 
-    missing_pairs: List[Tuple[str, str]] = []
-    for item in records:
-        name_value = str(item.get("part_name", "-")).strip()
-        if name_value and name_value != "-":
-            continue
-        norm_value = str(item.get("norm", "")).strip()
-        code_display = str(item.get("code", "")).strip()
-        if not norm_value and not code_display:
-            continue
-        missing_pairs.append((norm_value, code_display))
-
-    replacements = _fetch_part_names_from_inventory(missing_pairs)
-
-    if replacements:
+    if search_tokens:
+        filtered_records: List[Dict[str, Any]] = []
         for item in records:
-            norm_value = str(item.get("norm", "")).strip().upper()
-            code_display = str(item.get("code", "")).strip().upper()
-            lookup_key = norm_value or code_display.replace("-", "")
-            replacement = replacements.get(lookup_key)
-            if replacement:
-                item["part_name"] = replacement
+            if _record_matches_tokens(
+                search_tokens,
+                code_display=item["code"],
+                code_norm=item.get("norm", ""),
+                part_name=item.get("part_name", ""),
+            ):
+                filtered_records.append(item)
+        records = filtered_records
+        total = len(records)
+
+        if total:
+            max_offset = ((total - 1) // page_size) * page_size
+            start_index = min(max(offset, 0), max_offset)
+        else:
+            start_index = 0
+        end_index = start_index + page_size
+        paged_records = records[start_index:end_index]
+    else:
+        paged_records = records
 
     items: List[Dict[str, Any]] = []
-    for item in records:
+    for item in paged_records:
         items.append(
             {
                 "code": item["code"],
@@ -651,7 +789,10 @@ def fetch_code_statistics(
             }
         )
 
-    return items, total
+    if not search_tokens:
+        return items, total
+
+    return items, len(records)
 
 
 def refresh_missing_code_names(limit: int = 250) -> int:
