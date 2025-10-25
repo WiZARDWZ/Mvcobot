@@ -677,7 +677,7 @@ def fetch_code_statistics(
     if filters:
         where_clause = "WHERE " + " AND ".join(filters)
 
-    count_query = f"""
+    base_query = f"""
         WITH filtered AS (
             SELECT code_norm, code_display, part_name, requested_at, platform
             FROM platform_code_log
@@ -713,6 +713,11 @@ def fetch_code_statistics(
                     f.requested_at DESC
             ) AS latest
         )
+    """
+
+    count_query = base_query + "\n    SELECT COUNT(*) FROM labeled"
+
+    data_query_template = base_query + f"""
         SELECT code_display, code_norm, part_name, request_count
         FROM labeled
         ORDER BY request_count {order}, code_display ASC
@@ -735,7 +740,7 @@ def fetch_code_statistics(
         else:
             total = 0
 
-        final_query = data_query.format(pagination_clause=pagination_clause)
+        final_query = data_query_template.format(pagination_clause=pagination_clause)
         rows = cur.execute(final_query, *exec_params).fetchall()
 
     records: List[Dict[str, Any]] = []
