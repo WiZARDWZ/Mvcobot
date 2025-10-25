@@ -1,5 +1,7 @@
 # processor/transformer.py
 
+from typing import List, Optional, Set
+
 import pandas as pd
 
 
@@ -24,52 +26,104 @@ except ModuleNotFoundError:
         replace_partial_code,
     )
 
+
+def _select_part_number(row: pd.Series) -> str:
+    part_extracted = row.get("شماره قطعه_ex")
+    if pd.notna(part_extracted):
+        return str(part_extracted)
+
+    part_number, _ = extract_brand_and_part(row.get("کد کالا", ""))
+    if part_number is not None:
+        return str(part_number)
+
+    fallback = row.get("کد کالا", "")
+    return "" if pd.isna(fallback) else str(fallback)
+
+
+def _select_brand(row: pd.Series) -> Optional[str]:
+    brand_extracted = row.get("برند_ex")
+    if pd.notna(brand_extracted) and brand_extracted not in ("", None):
+        return brand_extracted
+
+    raw_brand = row.get("برند")
+    if pd.notna(raw_brand) and raw_brand not in ("", None):
+        return raw_brand
+
+    return None
+
+
+def _expand_part_variants(part_number: str) -> List[str]:
+    if not part_number:
+        return []
+
+    segments = str(part_number).split("/")
+    if len(segments) == 1:
+        return [segments[0]] if segments[0] else []
+
+    results: List[str] = []
+    last_code: Optional[str] = None
+
+    for raw_segment in segments:
+        segment = str(raw_segment).strip()
+        if not segment:
+            continue
+
+        if last_code is None:
+            if "-" not in segment:
+                continue
+            suffix = segment.rsplit("-", 1)[-1]
+            if len(suffix) < 5:
+                continue
+            last_code = segment
+            results.append(last_code)
+            continue
+
+        last_code = replace_partial_code(last_code, segment)
+        results.append(last_code)
+
+    if not results and segments:
+        base = str(part_number)
+        if base:
+            results.append(base)
+
+    return results
+
+
 def process_row(row):
     records = []
 
-    # Prefer the part/brand extracted from code if available
-    part_extracted, brand_extracted = row.get("شماره قطعه_ex"), row.get("برند_ex")
-    if pd.notna(part_extracted):
-        part_number = part_extracted
-    else:
-        part_number, _ = extract_brand_and_part(row.get("کد کالا", ""))
-    if not part_number:
-        part_number = row.get("کد کالا", "")
+    part_number = _select_part_number(row)
+    brand = _select_brand(row)
+    iran_code = row.get("Iran Code") if "Iran Code" in row else row.get("iran_code")
 
-    # Decide which brand to use
-    raw_brand = row.get("برند")
-    if pd.notna(brand_extracted) and brand_extracted:
-        brand = brand_extracted
-    else:
-        brand = raw_brand or "نامشخص"
+    variants = _expand_part_variants(part_number)
+    if not variants and part_number:
+        variants = [part_number]
 
-    last_base_code = None
-    for segment in str(part_number).split("/"):
-        seg = segment.strip()
-        if "-" in seg and len(seg.split("-")[-1]) >= 5:
-            last_base_code = seg
-        elif last_base_code:
-            last_base_code = replace_partial_code(last_base_code, seg)
-        else:
+    seen: Set[str] = set()
+    for code in variants:
+        if not code or code in seen:
             continue
-
-        records.append({
-            "برند": brand,
-            "شماره قطعه": last_base_code,
-            "نام کالا": row.get("نام کالا", ""),
-            "فی فروش": row.get("فی فروش", 0),
-            "iran_code": row.get("Iran Code")
-        })
+        seen.add(code)
+        records.append(
+            {
+                "برند": brand,
+                "شماره قطعه": code,
+                "نام کالا": row.get("نام کالا", ""),
+                "فی فروش": row.get("فی فروش", 0),
+                "iran_code": iran_code,
+            }
+        )
 
     return records
+
 
 def process_data(raw_data):
     processed_records = []
     df = pd.DataFrame(raw_data)
 
-    # Apply extraction only if there's a "کد کالا" column
     if "کد کالا" in df.columns:
-        extras = df["کد کالا"].apply(lambda x: pd.Series(extract_brand_and_part(x)))
+        extras = df["کد کالا"].apply(lambda value: pd.Series(extract_brand_and_part(value)))
         extras.columns = ["شماره قطعه_ex", "برند_ex"]
         df = pd.concat([df, extras], axis=1)
 
