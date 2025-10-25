@@ -21,23 +21,8 @@ const SORT_OPTIONS = [
   { value: 'asc', label: 'کمترین درخواست' },
 ];
 
-function formatCompactCode(code) {
-  const value = typeof code === 'string' ? code.trim() : '';
-  if (!value) {
-    return '—';
-  }
-  const threshold = 10;
-  if (value.length <= threshold) {
-    return value;
-  }
-  const prefix = value.slice(0, 3);
-  const suffix = value.slice(-3);
-  return `${prefix}…${suffix}`;
-}
-
 function createCodeChip(code) {
   const value = typeof code === 'string' ? code.trim() : '';
-  const compact = formatCompactCode(value);
   const chip = createElement('span', { classes: ['code-chip'] });
 
   if (!value) {
@@ -46,42 +31,9 @@ function createCodeChip(code) {
     return chip;
   }
 
-  chip.textContent = compact;
+  chip.textContent = value;
   chip.setAttribute('title', value);
-
-  if (compact !== value) {
-    chip.classList.add('code-chip--interactive');
-    chip.setAttribute('role', 'button');
-    chip.setAttribute('tabindex', '0');
-    chip.dataset.compact = compact;
-    chip.dataset.full = value;
-    chip.dataset.expanded = 'false';
-
-    const toggle = () => {
-      const expanded = chip.dataset.expanded === 'true';
-      if (expanded) {
-        chip.textContent = chip.dataset.compact;
-        chip.dataset.expanded = 'false';
-      } else {
-        chip.textContent = chip.dataset.full;
-        chip.dataset.expanded = 'true';
-      }
-    };
-
-    chip.addEventListener('click', toggle);
-    chip.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        toggle();
-      }
-    });
-    chip.addEventListener('blur', () => {
-      if (chip.dataset.expanded === 'true') {
-        chip.textContent = chip.dataset.compact;
-        chip.dataset.expanded = 'false';
-      }
-    });
-  }
+  chip.setAttribute('dir', 'ltr');
 
   return chip;
 }
@@ -106,8 +58,9 @@ export async function mount(container) {
   );
 
   const filterBar = createElement('div', { classes: ['filter-bar'] });
-  const rangeWrapper = createElement('label', {
-    classes: ['filter-bar__group'],
+  const rangeWrapper = createElement('label', { classes: ['filter-bar__group'] });
+  const rangeLabel = createElement('span', {
+    classes: ['filter-bar__label'],
     text: 'بازه زمانی',
   });
   const rangeSelect = createElement('select', { classes: ['filter-bar__select'] });
@@ -115,10 +68,11 @@ export async function mount(container) {
     const opt = createElement('option', { text: option.label, attrs: { value: option.value } });
     rangeSelect.appendChild(opt);
   });
-  rangeWrapper.appendChild(rangeSelect);
+  rangeWrapper.append(rangeLabel, rangeSelect);
 
-  const sortWrapper = createElement('label', {
-    classes: ['filter-bar__group'],
+  const sortWrapper = createElement('label', { classes: ['filter-bar__group'] });
+  const sortLabel = createElement('span', {
+    classes: ['filter-bar__label'],
     text: 'مرتب‌سازی',
   });
   const sortSelect = createElement('select', { classes: ['filter-bar__select'] });
@@ -126,7 +80,7 @@ export async function mount(container) {
     const opt = createElement('option', { text: option.label, attrs: { value: option.value } });
     sortSelect.appendChild(opt);
   });
-  sortWrapper.appendChild(sortSelect);
+  sortWrapper.append(sortLabel, sortSelect);
 
   const searchWrapper = createElement('label', { classes: ['filter-bar__group'] });
   const searchLabel = createElement('span', { classes: ['filter-bar__label'], text: 'جستجوی کد' });
@@ -139,6 +93,7 @@ export async function mount(container) {
       autocomplete: 'off',
     },
   });
+  searchInput.setAttribute('dir', 'ltr');
   searchWrapper.append(searchLabel, searchInput);
 
   const applyButton = createElement('button', {
@@ -193,7 +148,11 @@ export async function mount(container) {
   });
   pagination.append(prevButton, pageInfo, nextButton);
 
-  container.append(heading, filterBar, table.wrapper, pagination, loadingState);
+  const layout = createElement('div', { classes: ['page-layout'] });
+  const statsCard = createElement('section', { classes: ['card'] });
+  statsCard.append(heading, filterBar, table.wrapper, pagination, loadingState);
+  layout.append(statsCard);
+  container.append(layout);
 
   let currentPage = 1;
   const pageSize = 20;

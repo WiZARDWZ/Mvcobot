@@ -25,6 +25,8 @@ export async function mount(container) {
     createElement('h3', { classes: ['section-heading__title'], text: 'تنظیمات ربات' })
   );
 
+  const layout = createElement('div', { classes: ['page-layout'] });
+
   const workingHoursCard = createElement('div', { classes: ['card'] });
   workingHoursCard.append(
     createElement('h4', { classes: ['section-heading__title'], text: 'ساعات کاری' })
@@ -242,14 +244,8 @@ export async function mount(container) {
 
   const loadingState = createLoadingState('در حال دریافت تنظیمات...');
 
-  container.append(
-    header,
-    workingHoursCard,
-    operationsCard,
-    platformCard,
-    cacheCard,
-    loadingState
-  );
+  container.append(header, layout);
+  layout.append(workingHoursCard, operationsCard, platformCard, cacheCard, loadingState);
 
   let settings = null;
 
