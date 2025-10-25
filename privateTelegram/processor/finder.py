@@ -24,16 +24,19 @@ def find_similar_products(partial_code, only_original=False):
 
     for row in data:
         code = normalize_code(str(row.get("شماره قطعه", "")))
-        brand = row.get("برند", "نامشخص")
+        raw_brand = row.get("برند")
+        brand = raw_brand if raw_brand not in ("", None) else None
         price = row.get("فی فروش", 0)
         if isinstance(price, str) and price.isdigit():
             price = int(price)
 
         if code == target:
-            if only_original and brand not in ORIGINAL_BRANDS:
+            brand_key = brand.upper() if isinstance(brand, str) else brand
+            if only_original and brand_key not in ORIGINAL_BRANDS:
                 continue
-            if brand not in results or price > results[brand]["price"]:
-                results[brand] = {
+            brand_result_key = brand or ""
+            if brand_result_key not in results or price > results[brand_result_key]["price"]:
+                results[brand_result_key] = {
                     "product_code": row["شماره قطعه"],
                     "brand": brand,
                     "price": price,
@@ -52,7 +55,7 @@ def find_partial_matches(partial_code):
         if code.startswith(key):
             matches.append({
                 "product_code": row["شماره قطعه"],
-                "brand": row.get("برند", "نامشخص"),
+                "brand": row.get("برند") or None,
                 "price": row.get("فی فروش", 0),
                 "name": row.get("نام کالا", ""),
                 "iran_code": row.get("iran_code")
