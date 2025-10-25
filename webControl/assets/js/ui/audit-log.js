@@ -94,7 +94,11 @@ export async function mount(container) {
   const pageInfo = createElement('span', { classes: ['pagination__info'], text: '' });
   pagination.append(prevButton, pageInfo, nextButton);
 
-  container.append(heading, table.wrapper, pagination, loadingState);
+  const layout = createElement('div', { classes: ['page-layout'] });
+  const auditCard = createElement('section', { classes: ['card'] });
+  auditCard.append(heading, table.wrapper, pagination, loadingState);
+  layout.append(auditCard);
+  container.append(layout);
 
   let currentPage = 1;
   const pageSize = 20;

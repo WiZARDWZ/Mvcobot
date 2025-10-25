@@ -77,7 +77,11 @@ export async function mount(container) {
 
   const loadingState = createLoadingState('در حال دریافت دستورات...');
 
-  container.append(toolbar, table.wrapper, loadingState);
+  const layout = createElement('div', { classes: ['page-layout'] });
+  const managementCard = createElement('section', { classes: ['card'] });
+  managementCard.append(toolbar, table.wrapper, loadingState);
+  layout.append(managementCard);
+  container.append(layout);
 
   const searchInput = toolbar.querySelector('input[type="search"]');
 
