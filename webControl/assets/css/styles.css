@@ -348,6 +348,16 @@ textarea:focus-visible {
   color: var(--sidebar-muted);
 }
 
+.sidebar__link.is-active::before {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.sidebar__link > span {
+  position: relative;
+  z-index: 1;
+}
+
 .main-content {
   background-color: var(--color-bg);
   padding: var(--space-4);
