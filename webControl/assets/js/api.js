@@ -210,6 +210,22 @@ function resolvePeakPeriodLabel(value) {
   return PEAK_PERIOD_LABELS[value] ?? 'نامشخص';
 }
 
+function normalizeIncludeFlag(value, defaultValue = true) {
+  if (value === undefined || value === null) {
+    return defaultValue;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['false', '0', 'no', 'off'].includes(normalized)) {
+      return false;
+    }
+    if (['true', '1', 'yes', 'on'].includes(normalized)) {
+      return true;
+    }
+  }
+  return Boolean(value);
+}
+
 function resolveMockRangeKey(peakPeriod) {
   if (peakPeriod === 'month') return '3m';
   if (peakPeriod === 'year') return '1y';
@@ -396,6 +412,10 @@ async function buildExcelExportMock({
   productName,
   requestCount,
   peakPeriod,
+  includeMotherCode,
+  includeProductName,
+  includeRequestCount,
+  includePeakPeriod,
   fileName,
 }) {
   const now = new Date();
@@ -404,18 +424,81 @@ async function buildExcelExportMock({
     ? Number(requestCount)
     : null;
 
+  const includeMother = normalizeIncludeFlag(includeMotherCode, true);
+  const includeProduct = normalizeIncludeFlag(includeProductName, true);
+  const includeRequests = normalizeIncludeFlag(includeRequestCount, true);
+  const includePeak = normalizeIncludeFlag(includePeakPeriod, true);
+
+  const selectedColumns = [];
+
+  if (includeMother) {
+    selectedColumns.push({
+      key: 'motherCode',
+      label: 'کد مادر (قبل از ساده‌سازی)',
+      value: (item) => item.code,
+    });
+  }
+
+  if (includeProduct) {
+    selectedColumns.push({
+      key: 'productName',
+      label: 'نام کالا',
+      value: (item) => item.partName,
+    });
+  }
+
+  if (includeRequests) {
+    selectedColumns.push({
+      key: 'requestCount',
+      label: 'تعداد درخواست',
+      value: (item) => item.requestCount.toLocaleString('fa-IR'),
+    });
+  }
+
+  if (includePeak) {
+    selectedColumns.push({
+      key: 'peakPeriod',
+      label: 'بازه زمانی با بیشترین درخواست',
+      value: () => resolvePeakPeriodLabel(peakPeriod),
+    });
+  }
+
+  if (!selectedColumns.length) {
+    selectedColumns.push({
+      key: 'requestCount',
+      label: 'تعداد درخواست',
+      value: (item) => item.requestCount.toLocaleString('fa-IR'),
+    });
+  }
+
+  const columnWidth = Math.max(3, selectedColumns.length);
+  const padRow = (cells) => {
+    const row = cells.slice();
+    while (row.length < columnWidth) {
+      row.push('');
+    }
+    return row;
+  };
+
   const summaryRows = [
-    ['فیلد', 'مقدار', ''],
-    ['بازه تاریخ (از)', formatReportDate(from), ''],
-    ['بازه تاریخ (تا)', formatReportDate(to), ''],
-    ['کد مادر (قبل از ساده‌سازی)', motherCode ? String(motherCode).trim() : '—', ''],
-    ['نام کالا', productName ? String(productName).trim() : '—', ''],
-    [
+    padRow(['فیلد', 'مقدار']),
+    padRow(['بازه تاریخ (از)', formatReportDate(from)]),
+    padRow(['بازه تاریخ (تا)', formatReportDate(to)]),
+    padRow(['کد مادر (قبل از ساده‌سازی)', motherCode ? String(motherCode).trim() : '—']),
+    padRow(['نام کالا', productName ? String(productName).trim() : '—']),
+    padRow([
       'تعداد درخواست',
       normalizedRequestCount !== null ? normalizedRequestCount.toLocaleString('fa-IR') : 'نامشخص',
-      '',
-    ],
-    ['بازه زمانی با بیشترین درخواست', resolvePeakPeriodLabel(peakPeriod), ''],
+    ]),
+    padRow(['بازه زمانی با بیشترین درخواست', resolvePeakPeriodLabel(peakPeriod)]),
+    padRow([
+      'ستون‌های خروجی انتخاب‌شده',
+      selectedColumns.map((column) => column.label).join('، ') || '—',
+    ]),
+    padRow([
+      'توضیح کد مادر',
+      'کد مادر همان مقدار استخراج‌شده از پایگاه‌داده پیش از ساده‌سازی است.',
+    ]),
   ];
 
   const statsSnapshot = buildMockCodeStats({
@@ -425,20 +508,18 @@ async function buildExcelExportMock({
     pageSize: 10,
   });
 
-  const tableHeader = ['کد قطعه', 'نام قطعه', 'تعداد درخواست'];
-  const tableRows = statsSnapshot.items.map((item) => [
-    item.code,
-    item.partName,
-    item.requestCount.toLocaleString('fa-IR'),
-  ]);
+  const tableHeader = padRow(selectedColumns.map((column) => column.label));
+  const tableRows = statsSnapshot.items.map((item) =>
+    padRow(selectedColumns.map((column) => column.value(item)))
+  );
 
   const rows = [
     ...summaryRows,
-    ['', '', ''],
+    padRow(Array.from({ length: columnWidth }, () => '')),
     tableHeader,
     ...tableRows,
-    ['', '', ''],
-    ['تاریخ تهیه گزارش', formatReportDateTime(now), ''],
+    padRow(Array.from({ length: columnWidth }, () => '')),
+    padRow(['تاریخ تهیه گزارش', formatReportDateTime(now)]),
   ];
 
   const blob = await createExcelBlob(rows);
@@ -796,6 +877,10 @@ export const api = {
           ? Number(filters.requestCount)
           : null,
       peakPeriod: filters.peakPeriod ?? 'day',
+      includeMotherCode: normalizeIncludeFlag(filters.includeMotherCode, true),
+      includeProductName: normalizeIncludeFlag(filters.includeProductName, true),
+      includeRequestCount: normalizeIncludeFlag(filters.includeRequestCount, true),
+      includePeakPeriod: normalizeIncludeFlag(filters.includePeakPeriod, true),
       fileName: filters.fileName ?? null,
     };
 

@@ -401,11 +401,6 @@ export async function mount(container) {
     });
     requestCountField.append(requestCountLabel, requestCountInput);
 
-    const peakField = createElement('div', { classes: ['export-modal__field'] });
-    const peakLabel = createElement('label', {
-      attrs: { for: `export-peak-${suffix}` },
-      text: 'بازه زمانی با بیشترین درخواست',
-    });
     const peakSelect = createElement('select', {
       attrs: {
         id: `export-peak-${suffix}`,
@@ -420,10 +415,78 @@ export async function mount(container) {
       peakSelect.appendChild(opt);
     });
     peakSelect.value = 'day';
-    peakField.append(peakLabel, peakSelect);
-
-    requestInputs.append(requestCountField, peakField);
+    requestInputs.append(requestCountField);
     requestRow.append(requestLabel, requestInputs);
+
+    const columnsRow = createElement('div', { classes: ['export-modal__row'] });
+    const columnsTitle = createElement('span', {
+      classes: ['export-modal__row-title'],
+      text: 'ستون‌های خروجی اکسل',
+    });
+    const columnsInputs = createElement('div', { classes: ['export-modal__checkboxes'] });
+
+    function createColumnCheckbox({ id, name, label }) {
+      const field = createElement('label', {
+        classes: ['export-modal__checkbox'],
+        attrs: { for: `${id}-${suffix}` },
+      });
+      const checkbox = createElement('input', {
+        attrs: {
+          type: 'checkbox',
+          id: `${id}-${suffix}`,
+          name,
+        },
+      });
+      checkbox.checked = true;
+      const caption = createElement('span', { classes: ['export-modal__checkbox-label'], text: label });
+      field.append(checkbox, caption);
+      return { field, checkbox };
+    }
+
+    const motherColumn = createColumnCheckbox({
+      id: 'export-column-mother',
+      name: 'includeMotherCode',
+      label: 'کد مادر (قبل از ساده‌سازی)',
+    });
+    const productColumn = createColumnCheckbox({
+      id: 'export-column-product',
+      name: 'includeProductName',
+      label: 'نام کالا',
+    });
+    const requestColumn = createColumnCheckbox({
+      id: 'export-column-requests',
+      name: 'includeRequestCount',
+      label: 'تعداد درخواست',
+    });
+    const peakColumn = createColumnCheckbox({
+      id: 'export-column-peak',
+      name: 'includePeakPeriod',
+      label: 'ستون بازه زمانی با بیشترین درخواست',
+    });
+
+    const peakControls = createElement('div', { classes: ['export-modal__checkbox-extra'] });
+    const peakControlsLabel = createElement('label', {
+      attrs: { for: `export-peak-${suffix}` },
+      text: 'نوع بازه (روز / ماه / سال)',
+    });
+    peakControls.append(peakControlsLabel, peakSelect);
+    peakColumn.field.appendChild(peakControls);
+
+    columnsInputs.append(
+      motherColumn.field,
+      productColumn.field,
+      requestColumn.field,
+      peakColumn.field
+    );
+    columnsRow.append(columnsTitle, columnsInputs);
+
+    const syncPeakControls = () => {
+      peakSelect.disabled = !peakColumn.checkbox.checked;
+      peakControlsLabel.classList.toggle('is-disabled', peakSelect.disabled);
+    };
+
+    peakColumn.checkbox.addEventListener('change', syncPeakControls);
+    syncPeakControls();
 
     const fileField = createElement('div', { classes: ['export-modal__field'] });
     const fileLabel = createElement('label', {
@@ -469,7 +532,7 @@ export async function mount(container) {
     downloadButton.append(downloadSpinner, downloadLabel);
     actions.append(cancelButton, downloadButton);
 
-    form.append(dateRow, detailsRow, requestRow, fileField, hint, actions);
+    form.append(dateRow, detailsRow, requestRow, columnsRow, fileField, hint, actions);
 
     let isSubmitting = false;
 
@@ -478,9 +541,24 @@ export async function mount(container) {
       downloadButton.classList.toggle('is-loading', state);
       downloadButton.disabled = state;
       cancelButton.disabled = state;
-      [dateFromInput, dateToInput, motherCodeInput, productNameInput, requestCountInput, peakSelect, fileInput].forEach((input) => {
+      [
+        dateFromInput,
+        dateToInput,
+        motherCodeInput,
+        productNameInput,
+        requestCountInput,
+        peakSelect,
+        fileInput,
+        motherColumn.checkbox,
+        productColumn.checkbox,
+        requestColumn.checkbox,
+        peakColumn.checkbox,
+      ].forEach((input) => {
         input.disabled = state;
       });
+      if (!state) {
+        syncPeakControls();
+      }
     };
 
     const handleCancel = (event) => {
@@ -504,13 +582,19 @@ export async function mount(container) {
         normalizedRequestCount = numericValue;
       }
 
+      const peakPeriodValue = peakSelect.value || formData.get('peakPeriod') || 'day';
+
       const payload = {
         dateFrom: formData.get('dateFrom') || null,
         dateTo: formData.get('dateTo') || null,
         motherCode: (formData.get('motherCode') || '').toString().trim(),
         productName: (formData.get('productName') || '').toString().trim(),
         requestCount: normalizedRequestCount,
-        peakPeriod: formData.get('peakPeriod') || 'day',
+        peakPeriod: peakPeriodValue,
+        includeMotherCode: formData.has('includeMotherCode'),
+        includeProductName: formData.has('includeProductName'),
+        includeRequestCount: formData.has('includeRequestCount'),
+        includePeakPeriod: formData.has('includePeakPeriod'),
         fileName: sanitizeFileName(formData.get('fileName'), defaultFileName),
       };
 
@@ -543,6 +627,7 @@ export async function mount(container) {
     const closeModal = () => {
       cancelButton.removeEventListener('click', handleCancel);
       form.removeEventListener('submit', handleSubmit);
+      peakColumn.checkbox.removeEventListener('change', syncPeakControls);
       modalHandle.close();
     };
 
@@ -552,6 +637,7 @@ export async function mount(container) {
       onClose: () => {
         cancelButton.removeEventListener('click', handleCancel);
         form.removeEventListener('submit', handleSubmit);
+        peakColumn.checkbox.removeEventListener('change', syncPeakControls);
       },
     });
 

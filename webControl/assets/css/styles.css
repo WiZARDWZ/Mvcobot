@@ -1544,6 +1544,93 @@ tbody tr:nth-of-type(odd) {
   gap: var(--space-2);
 }
 
+.export-modal__row-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--color-text);
+}
+
+.export-modal__checkboxes {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.export-modal__checkbox {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background-color: var(--color-surface-alt);
+  cursor: pointer;
+  transition: border-color var(--transition-base), box-shadow var(--transition-base);
+}
+
+.export-modal__checkbox:hover,
+.export-modal__checkbox:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.12);
+}
+
+.export-modal__checkbox input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--color-primary);
+  margin-top: 2px;
+}
+
+.export-modal__checkbox-label {
+  font-size: 14px;
+  color: var(--color-text);
+  line-height: 1.5;
+  align-self: center;
+}
+
+.export-modal__checkbox-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  grid-column: 1 / -1;
+  padding-inline-start: 26px;
+}
+
+.export-modal__checkbox-extra label {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  transition: color var(--transition-base);
+}
+
+.export-modal__checkbox-extra label.is-disabled {
+  color: var(--color-text-muted);
+  opacity: 0.6;
+}
+
+.export-modal__checkbox-extra select {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+}
+
+:root[data-theme='dark'] .export-modal__checkbox {
+  background-color: rgba(30, 41, 59, 0.4);
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
+:root[data-theme='dark'] .export-modal__checkbox:hover,
+:root[data-theme='dark'] .export-modal__checkbox:focus-within {
+  border-color: rgba(165, 180, 252, 0.6);
+  box-shadow: 0 0 0 2px rgba(165, 180, 252, 0.18);
+}
+
+:root[data-theme='dark'] .export-modal__checkbox-extra select {
+  background-color: rgba(30, 41, 59, 0.7);
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
 .export-modal__actions {
   display: flex;
   justify-content: flex-end;
