@@ -333,49 +333,6 @@ export async function mount(container) {
     dateInputs.append(dateFromField, dateToField);
     dateRow.append(dateRowLabel, dateInputs);
 
-    const detailsRow = createElement('div', { classes: ['export-modal__row'] });
-    const detailsLabel = createElement('label', {
-      attrs: { for: `export-mother-${suffix}` },
-      text: 'مشخصات کالا',
-    });
-    const detailsInputs = createElement('div', { classes: ['export-modal__inputs'] });
-
-    const motherCodeField = createElement('div', { classes: ['export-modal__field'] });
-    const motherCodeLabel = createElement('label', {
-      attrs: { for: `export-mother-${suffix}` },
-      text: 'کد مادر (قبل از ساده‌سازی)',
-    });
-    const motherCodeInput = createElement('input', {
-      attrs: {
-        type: 'text',
-        id: `export-mother-${suffix}`,
-        name: 'motherCode',
-        placeholder: 'مثال: 12345-67890',
-        autocomplete: 'off',
-      },
-    });
-    motherCodeInput.setAttribute('dir', 'ltr');
-    motherCodeField.append(motherCodeLabel, motherCodeInput);
-
-    const productNameField = createElement('div', { classes: ['export-modal__field'] });
-    const productNameLabel = createElement('label', {
-      attrs: { for: `export-product-${suffix}` },
-      text: 'نام کالا',
-    });
-    const productNameInput = createElement('input', {
-      attrs: {
-        type: 'text',
-        id: `export-product-${suffix}`,
-        name: 'productName',
-        placeholder: 'مثال: سنسور اکسیژن',
-        autocomplete: 'off',
-      },
-    });
-    productNameField.append(productNameLabel, productNameInput);
-
-    detailsInputs.append(motherCodeField, productNameField);
-    detailsRow.append(detailsLabel, detailsInputs);
-
     const requestRow = createElement('div', { classes: ['export-modal__row'] });
     const requestLabel = createElement('label', {
       attrs: { for: `export-request-${suffix}` },
@@ -386,7 +343,7 @@ export async function mount(container) {
     const requestCountField = createElement('div', { classes: ['export-modal__field'] });
     const requestCountLabel = createElement('label', {
       attrs: { for: `export-request-${suffix}` },
-      text: 'تعداد درخواست',
+      text: 'حداقل تعداد درخواست',
     });
     const requestCountInput = createElement('input', {
       attrs: {
@@ -395,7 +352,7 @@ export async function mount(container) {
         name: 'requestCount',
         min: '0',
         step: '1',
-        placeholder: 'مثال: 120',
+        placeholder: 'مثال: 5',
         inputmode: 'numeric',
       },
     });
@@ -415,7 +372,12 @@ export async function mount(container) {
       peakSelect.appendChild(opt);
     });
     peakSelect.value = 'day';
-    requestInputs.append(requestCountField);
+    const requestHint = createElement('p', {
+      classes: ['export-modal__hint'],
+      text: 'اگر این فیلد خالی باشد، تمام رکوردها صادر می‌شوند؛ در صورت وارد کردن مقدار، فقط رکوردهای با تعداد درخواست بیش از عدد وارد شده خروجی خواهند شد.',
+    });
+
+    requestInputs.append(requestCountField, requestHint);
     requestRow.append(requestLabel, requestInputs);
 
     const columnsRow = createElement('div', { classes: ['export-modal__row'] });
@@ -424,6 +386,11 @@ export async function mount(container) {
       text: 'ستون‌های خروجی اکسل',
     });
     const columnsInputs = createElement('div', { classes: ['export-modal__checkboxes'] });
+
+    const alwaysIncludedNotice = createElement('p', {
+      classes: ['export-modal__hint'],
+      text: 'ستون «کد قطعه» به صورت ثابت در تمامی خروجی‌ها قرار می‌گیرد.',
+    });
 
     function createColumnCheckbox({ id, name, label }) {
       const field = createElement('label', {
@@ -478,7 +445,7 @@ export async function mount(container) {
       requestColumn.field,
       peakColumn.field
     );
-    columnsRow.append(columnsTitle, columnsInputs);
+    columnsRow.append(columnsTitle, columnsInputs, alwaysIncludedNotice);
 
     const syncPeakControls = () => {
       peakSelect.disabled = !peakColumn.checkbox.checked;
@@ -532,7 +499,7 @@ export async function mount(container) {
     downloadButton.append(downloadSpinner, downloadLabel);
     actions.append(cancelButton, downloadButton);
 
-    form.append(dateRow, detailsRow, requestRow, columnsRow, fileField, hint, actions);
+    form.append(dateRow, requestRow, columnsRow, fileField, hint, actions);
 
     let isSubmitting = false;
 
@@ -544,8 +511,6 @@ export async function mount(container) {
       [
         dateFromInput,
         dateToInput,
-        motherCodeInput,
-        productNameInput,
         requestCountInput,
         peakSelect,
         fileInput,
@@ -587,8 +552,6 @@ export async function mount(container) {
       const payload = {
         dateFrom: formData.get('dateFrom') || null,
         dateTo: formData.get('dateTo') || null,
-        motherCode: (formData.get('motherCode') || '').toString().trim(),
-        productName: (formData.get('productName') || '').toString().trim(),
         requestCount: normalizedRequestCount,
         peakPeriod: peakPeriodValue,
         includeMotherCode: formData.has('includeMotherCode'),

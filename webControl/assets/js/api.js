@@ -73,12 +73,39 @@ const samplePartNames = [
   'میل موجگیر',
 ];
 
+function deriveMotherCode(code) {
+  if (!code || typeof code !== 'string') {
+    return '—';
+  }
+  const [prefix, suffix = ''] = code.split('-');
+  if (!suffix) {
+    return code;
+  }
+  const trunk = suffix.slice(0, -1) || suffix;
+  const variationDigits = ['1', '5'];
+  const variations = variationDigits
+    .map((digit) => `${trunk}${digit}`)
+    .filter((variant) => variant !== suffix);
+  const unique = [suffix, ...variations.filter((variant, index, list) => list.indexOf(variant) === index)];
+  const tail = unique
+    .slice(1)
+    .map((variant) => {
+      if (variant.startsWith(trunk)) {
+        return variant.slice(trunk.length) || variant;
+      }
+      return variant;
+    })
+    .join('/');
+  return tail ? `${prefix}-${suffix}/${tail}` : `${prefix}-${suffix}`;
+}
+
 const codeStatsBase = Array.from({ length: 60 }, (_, index) => {
   const raw = `${Math.floor(seededRandom() * 9000000000) + 1000000000}`;
   const code = `${raw.slice(0, 5)}-${raw.slice(5, 10)}`;
   const partName = samplePartNames[index % samplePartNames.length];
   const baseCount = Math.floor(seededRandom() * 180 + 15);
-  return { code, partName, baseCount };
+  const motherCode = deriveMotherCode(code);
+  return { code, partName, baseCount, motherCode };
 });
 
 function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize, searchTerm = '' }) {
@@ -97,7 +124,12 @@ function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize, searchTerm = 
   const enriched = codeStatsBase.map((item) => {
     const jitter = Math.floor(seededRandom() * 12);
     const requestCount = Math.max(1, Math.round(item.baseCount * factor + jitter));
-    return { code: item.code, partName: item.partName, requestCount };
+    return {
+      code: item.code,
+      partName: item.partName,
+      requestCount,
+      motherCode: item.motherCode,
+    };
   });
 
   const searchValue = (searchTerm || '').trim().toUpperCase();
@@ -408,8 +440,6 @@ ${sheetRowsXml}
 async function buildExcelExportMock({
   from,
   to,
-  motherCode,
-  productName,
   requestCount,
   peakPeriod,
   includeMotherCode,
@@ -429,13 +459,19 @@ async function buildExcelExportMock({
   const includeRequests = normalizeIncludeFlag(includeRequestCount, true);
   const includePeak = normalizeIncludeFlag(includePeakPeriod, true);
 
-  const selectedColumns = [];
+  const selectedColumns = [
+    {
+      key: 'code',
+      label: 'کد قطعه',
+      value: (item) => item.code,
+    },
+  ];
 
   if (includeMother) {
     selectedColumns.push({
       key: 'motherCode',
       label: 'کد مادر (قبل از ساده‌سازی)',
-      value: (item) => item.code,
+      value: (item) => item.motherCode ?? item.code,
     });
   }
 
@@ -465,9 +501,9 @@ async function buildExcelExportMock({
 
   if (!selectedColumns.length) {
     selectedColumns.push({
-      key: 'requestCount',
-      label: 'تعداد درخواست',
-      value: (item) => item.requestCount.toLocaleString('fa-IR'),
+      key: 'code',
+      label: 'کد قطعه',
+      value: (item) => item.code,
     });
   }
 
@@ -484,11 +520,11 @@ async function buildExcelExportMock({
     padRow(['فیلد', 'مقدار']),
     padRow(['بازه تاریخ (از)', formatReportDate(from)]),
     padRow(['بازه تاریخ (تا)', formatReportDate(to)]),
-    padRow(['کد مادر (قبل از ساده‌سازی)', motherCode ? String(motherCode).trim() : '—']),
-    padRow(['نام کالا', productName ? String(productName).trim() : '—']),
     padRow([
-      'تعداد درخواست',
-      normalizedRequestCount !== null ? normalizedRequestCount.toLocaleString('fa-IR') : 'نامشخص',
+      'فیلتر تعداد درخواست',
+      normalizedRequestCount !== null
+        ? `بیش از ${normalizedRequestCount.toLocaleString('fa-IR')} درخواست`
+        : 'بدون فیلتر',
     ]),
     padRow(['بازه زمانی با بیشترین درخواست', resolvePeakPeriodLabel(peakPeriod)]),
     padRow([
@@ -505,11 +541,16 @@ async function buildExcelExportMock({
     rangeKey: resolveMockRangeKey(peakPeriod),
     sortOrder: 'desc',
     page: 1,
-    pageSize: 10,
+    pageSize: codeStatsBase.length,
   });
 
+  let exportItems = statsSnapshot.items;
+  if (normalizedRequestCount !== null) {
+    exportItems = exportItems.filter((item) => item.requestCount > normalizedRequestCount);
+  }
+
   const tableHeader = padRow(selectedColumns.map((column) => column.label));
-  const tableRows = statsSnapshot.items.map((item) =>
+  const tableRows = exportItems.map((item) =>
     padRow(selectedColumns.map((column) => column.value(item)))
   );
 
@@ -868,8 +909,6 @@ export const api = {
     const payload = {
       from: filters.dateFrom ?? null,
       to: filters.dateTo ?? null,
-      motherCode: filters.motherCode ?? null,
-      productName: filters.productName ?? null,
       requestCount:
         typeof filters.requestCount === 'number' && !Number.isNaN(filters.requestCount)
           ? filters.requestCount
