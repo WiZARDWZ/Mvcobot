@@ -73,12 +73,39 @@ const samplePartNames = [
   'میل موجگیر',
 ];
 
+function deriveMotherCode(code) {
+  if (!code || typeof code !== 'string') {
+    return '—';
+  }
+  const [prefix, suffix = ''] = code.split('-');
+  if (!suffix) {
+    return code;
+  }
+  const trunk = suffix.slice(0, -1) || suffix;
+  const variationDigits = ['1', '5'];
+  const variations = variationDigits
+    .map((digit) => `${trunk}${digit}`)
+    .filter((variant) => variant !== suffix);
+  const unique = [suffix, ...variations.filter((variant, index, list) => list.indexOf(variant) === index)];
+  const tail = unique
+    .slice(1)
+    .map((variant) => {
+      if (variant.startsWith(trunk)) {
+        return variant.slice(trunk.length) || variant;
+      }
+      return variant;
+    })
+    .join('/');
+  return tail ? `${prefix}-${suffix}/${tail}` : `${prefix}-${suffix}`;
+}
+
 const codeStatsBase = Array.from({ length: 60 }, (_, index) => {
   const raw = `${Math.floor(seededRandom() * 9000000000) + 1000000000}`;
   const code = `${raw.slice(0, 5)}-${raw.slice(5, 10)}`;
   const partName = samplePartNames[index % samplePartNames.length];
   const baseCount = Math.floor(seededRandom() * 180 + 15);
-  return { code, partName, baseCount };
+  const motherCode = deriveMotherCode(code);
+  return { code, partName, baseCount, motherCode };
 });
 
 function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize, searchTerm = '' }) {
@@ -97,7 +124,12 @@ function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize, searchTerm = 
   const enriched = codeStatsBase.map((item) => {
     const jitter = Math.floor(seededRandom() * 12);
     const requestCount = Math.max(1, Math.round(item.baseCount * factor + jitter));
-    return { code: item.code, partName: item.partName, requestCount };
+    return {
+      code: item.code,
+      partName: item.partName,
+      requestCount,
+      motherCode: item.motherCode,
+    };
   });
 
   const searchValue = (searchTerm || '').trim().toUpperCase();
@@ -135,6 +167,408 @@ function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize, searchTerm = 
     pageSize: safePageSize,
     total,
     pages,
+  };
+}
+
+const EXCEL_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+const PEAK_PERIOD_LABELS = {
+  day: 'روز',
+  month: 'ماه',
+  year: 'سال',
+};
+
+function ensureXlsxFileName(value, referenceDate = new Date()) {
+  const base = referenceDate instanceof Date && !Number.isNaN(referenceDate.valueOf())
+    ? referenceDate.toISOString().slice(0, 10)
+    : 'report';
+  const trimmed = (value ?? '').toString().trim();
+  const safe = (trimmed || `گزارش-آمار-${base}`).replace(/[\\/:*?"<>|]+/g, '-');
+  return safe.toLowerCase().endsWith('.xlsx') ? safe : `${safe}.xlsx`;
+}
+
+function escapeExcelXml(value) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function columnLetter(index) {
+  let dividend = index;
+  let columnName = '';
+  while (dividend > 0) {
+    const modulo = (dividend - 1) % 26;
+    columnName = String.fromCharCode(65 + modulo) + columnName;
+    dividend = Math.floor((dividend - modulo) / 26);
+  }
+  return columnName || 'A';
+}
+
+function formatReportDate(value) {
+  if (!value) return 'نامشخص';
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.valueOf())) {
+      return 'نامشخص';
+    }
+    return new Intl.DateTimeFormat('fa-IR', {
+      year: 'numeric',
+      month: 'long',
+      day: '2-digit',
+    }).format(date);
+  } catch (error) {
+    return 'نامشخص';
+  }
+}
+
+function formatReportDateTime(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.valueOf())) {
+    return 'نامشخص';
+  }
+  return new Intl.DateTimeFormat('fa-IR', {
+    year: 'numeric',
+    month: 'long',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function resolvePeakPeriodLabel(value) {
+  return PEAK_PERIOD_LABELS[value] ?? 'نامشخص';
+}
+
+function normalizeIncludeFlag(value, defaultValue = true) {
+  if (value === undefined || value === null) {
+    return defaultValue;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['false', '0', 'no', 'off'].includes(normalized)) {
+      return false;
+    }
+    if (['true', '1', 'yes', 'on'].includes(normalized)) {
+      return true;
+    }
+  }
+  return Boolean(value);
+}
+
+function resolveMockRangeKey(peakPeriod) {
+  if (peakPeriod === 'month') return '3m';
+  if (peakPeriod === 'year') return '1y';
+  return '1m';
+}
+
+async function createExcelBlob(rows) {
+  const { default: JSZip } = await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm');
+  const zip = new JSZip();
+  const maxColumns = rows.reduce((max, row) => Math.max(max, row.length), 0) || 1;
+  const normalizedRows = rows.map((row) => {
+    const next = Array.from(row);
+    while (next.length < maxColumns) {
+      next.push('');
+    }
+    return next;
+  });
+
+  const dimension = `A1:${columnLetter(maxColumns)}${normalizedRows.length}`;
+  const sheetRowsXml = normalizedRows
+    .map((row, rowIndex) => {
+      const cells = row
+        .map((value, cellIndex) => {
+          const cellRef = `${columnLetter(cellIndex + 1)}${rowIndex + 1}`;
+          const text = value == null ? '' : String(value);
+          return `<c r="${cellRef}" t="inlineStr"><is><t>${escapeExcelXml(text)}</t></is></c>`;
+        })
+        .join('');
+      return `<row r="${rowIndex + 1}">${cells}</row>`;
+    })
+    .join('\n');
+
+  const columnWidths = Array.from({ length: maxColumns }, (_, index) => {
+    if (index === 2) return 18;
+    if (index === 1) return 34;
+    return 28;
+  });
+
+  const colsXml = columnWidths
+    .map((width, index) => {
+      const position = index + 1;
+      return `<col min="${position}" max="${position}" width="${width}" customWidth="1"/>`;
+    })
+    .join('\n    ');
+
+  const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheetViews>
+    <sheetView workbookViewId="0" rightToLeft="1"/>
+  </sheetViews>
+  <sheetFormatPr defaultRowHeight="15"/>
+  <dimension ref="${dimension}"/>
+  <cols>
+    ${colsXml}
+  </cols>
+  <sheetData>
+${sheetRowsXml}
+  </sheetData>
+</worksheet>`;
+
+  const workbookXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <fileVersion appName="xl"/>
+  <workbookPr date1904="false"/>
+  <bookViews>
+    <workbookView xWindow="0" yWindow="0" windowWidth="28800" windowHeight="17600"/>
+  </bookViews>
+  <sheets>
+    <sheet name="گزارش" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>`;
+
+  const workbookRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`;
+
+  const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1">
+    <font>
+      <sz val="11"/>
+      <name val="Calibri"/>
+    </font>
+  </fonts>
+  <fills count="1">
+    <fill>
+      <patternFill patternType="none"/>
+    </fill>
+  </fills>
+  <borders count="1">
+    <border>
+      <left/>
+      <right/>
+      <top/>
+      <bottom/>
+      <diagonal/>
+    </border>
+  </borders>
+  <cellStyleXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+  </cellStyleXfs>
+  <cellXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+  </cellXfs>
+  <cellStyles count="1">
+    <cellStyle name="Normal" xfId="0" builtinId="0"/>
+  </cellStyles>
+</styleSheet>`;
+
+  const contentTypesXml = `<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>`;
+
+  const rootRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>`;
+
+  const now = new Date();
+  const docPropsCore = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:creator>Mvcobot Control Panel</dc:creator>
+  <cp:lastModifiedBy>Mvcobot Control Panel</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">${now.toISOString()}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">${now.toISOString()}</dcterms:modified>
+</cp:coreProperties>`;
+
+  const docPropsApp = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>Mvcobot</Application>
+  <DocSecurity>0</DocSecurity>
+  <ScaleCrop>false</ScaleCrop>
+  <HeadingPairs>
+    <vt:vector size="2" baseType="variant">
+      <vt:variant>
+        <vt:lpstr>Worksheets</vt:lpstr>
+      </vt:variant>
+      <vt:variant>
+        <vt:i4>1</vt:i4>
+      </vt:variant>
+    </vt:vector>
+  </HeadingPairs>
+  <TitlesOfParts>
+    <vt:vector size="1" baseType="lpstr">
+      <vt:lpstr>گزارش</vt:lpstr>
+    </vt:vector>
+  </TitlesOfParts>
+  <Company>Mvcobot</Company>
+  <LinksUpToDate>false</LinksUpToDate>
+  <SharedDoc>false</SharedDoc>
+  <HyperlinksChanged>false</HyperlinksChanged>
+  <AppVersion>16.0300</AppVersion>
+</Properties>`;
+
+  zip.file('[Content_Types].xml', contentTypesXml);
+  zip.folder('_rels').file('.rels', rootRelsXml);
+  const docProps = zip.folder('docProps');
+  docProps.file('core.xml', docPropsCore);
+  docProps.file('app.xml', docPropsApp);
+  const xl = zip.folder('xl');
+  xl.file('workbook.xml', workbookXml);
+  xl.folder('_rels').file('workbook.xml.rels', workbookRelsXml);
+  xl.file('styles.xml', stylesXml);
+  xl.folder('worksheets').file('sheet1.xml', sheetXml);
+
+  return zip.generateAsync({ type: 'blob', mimeType: EXCEL_MIME_TYPE });
+}
+
+async function buildExcelExportMock({
+  from,
+  to,
+  requestCount,
+  peakPeriod,
+  includeMotherCode,
+  includeProductName,
+  includeRequestCount,
+  includePeakPeriod,
+  fileName,
+}) {
+  const now = new Date();
+  const safeFileName = ensureXlsxFileName(fileName, now);
+  const normalizedRequestCount = Number.isFinite(Number(requestCount))
+    ? Number(requestCount)
+    : null;
+
+  const includeMother = normalizeIncludeFlag(includeMotherCode, true);
+  const includeProduct = normalizeIncludeFlag(includeProductName, true);
+  const includeRequests = normalizeIncludeFlag(includeRequestCount, true);
+  const includePeak = normalizeIncludeFlag(includePeakPeriod, true);
+
+  const selectedColumns = [
+    {
+      key: 'code',
+      label: 'کد قطعه',
+      value: (item) => item.code,
+    },
+  ];
+
+  if (includeMother) {
+    selectedColumns.push({
+      key: 'motherCode',
+      label: 'کد مادر (قبل از ساده‌سازی)',
+      value: (item) => item.motherCode ?? item.code,
+    });
+  }
+
+  if (includeProduct) {
+    selectedColumns.push({
+      key: 'productName',
+      label: 'نام کالا',
+      value: (item) => item.partName,
+    });
+  }
+
+  if (includeRequests) {
+    selectedColumns.push({
+      key: 'requestCount',
+      label: 'تعداد درخواست',
+      value: (item) => item.requestCount.toLocaleString('fa-IR'),
+    });
+  }
+
+  if (includePeak) {
+    selectedColumns.push({
+      key: 'peakPeriod',
+      label: 'بازه زمانی با بیشترین درخواست',
+      value: () => resolvePeakPeriodLabel(peakPeriod),
+    });
+  }
+
+  if (!selectedColumns.length) {
+    selectedColumns.push({
+      key: 'code',
+      label: 'کد قطعه',
+      value: (item) => item.code,
+    });
+  }
+
+  const columnWidth = Math.max(3, selectedColumns.length);
+  const padRow = (cells) => {
+    const row = cells.slice();
+    while (row.length < columnWidth) {
+      row.push('');
+    }
+    return row;
+  };
+
+  const summaryRows = [
+    padRow(['فیلد', 'مقدار']),
+    padRow(['بازه تاریخ (از)', formatReportDate(from)]),
+    padRow(['بازه تاریخ (تا)', formatReportDate(to)]),
+    padRow([
+      'فیلتر تعداد درخواست',
+      normalizedRequestCount !== null
+        ? `بیش از ${normalizedRequestCount.toLocaleString('fa-IR')} درخواست`
+        : 'بدون فیلتر',
+    ]),
+    padRow(['بازه زمانی با بیشترین درخواست', resolvePeakPeriodLabel(peakPeriod)]),
+    padRow([
+      'ستون‌های خروجی انتخاب‌شده',
+      selectedColumns.map((column) => column.label).join('، ') || '—',
+    ]),
+    padRow([
+      'توضیح کد مادر',
+      'کد مادر همان مقدار استخراج‌شده از پایگاه‌داده پیش از ساده‌سازی است.',
+    ]),
+  ];
+
+  const statsSnapshot = buildMockCodeStats({
+    rangeKey: resolveMockRangeKey(peakPeriod),
+    sortOrder: 'desc',
+    page: 1,
+    pageSize: codeStatsBase.length,
+  });
+
+  let exportItems = statsSnapshot.items;
+  if (normalizedRequestCount !== null) {
+    exportItems = exportItems.filter((item) => item.requestCount > normalizedRequestCount);
+  }
+
+  const tableHeader = padRow(selectedColumns.map((column) => column.label));
+  const tableRows = exportItems.map((item) =>
+    padRow(selectedColumns.map((column) => column.value(item)))
+  );
+
+  const rows = [
+    ...summaryRows,
+    padRow(Array.from({ length: columnWidth }, () => '')),
+    tableHeader,
+    ...tableRows,
+    padRow(Array.from({ length: columnWidth }, () => '')),
+    padRow(['تاریخ تهیه گزارش', formatReportDateTime(now)]),
+  ];
+
+  const blob = await createExcelBlob(rows);
+
+  return {
+    fileName: safeFileName,
+    blob,
+    generatedAt: now.toISOString(),
   };
 }
 
@@ -364,7 +798,14 @@ function emitFallback(detail) {
 
 async function runMock(handler) {
   await delay();
-  const result = handler();
+  const result = await handler();
+  if (result instanceof Blob) {
+    return result;
+  }
+  if (result && typeof result === 'object' && 'blob' in result && result.blob instanceof Blob) {
+    const { blob, ...rest } = result;
+    return { ...clone(rest), blob };
+  }
   return clone(result);
 }
 
@@ -462,6 +903,63 @@ export const api = {
       () => request(`/api/v1/code-stats?${params.toString()}`),
       mockHandler
     );
+  },
+
+  async exportCodeStatsToExcel(filters = {}) {
+    const payload = {
+      from: filters.dateFrom ?? null,
+      to: filters.dateTo ?? null,
+      requestCount:
+        typeof filters.requestCount === 'number' && !Number.isNaN(filters.requestCount)
+          ? filters.requestCount
+          : filters.requestCount && !Number.isNaN(Number(filters.requestCount))
+          ? Number(filters.requestCount)
+          : null,
+      peakPeriod: filters.peakPeriod ?? 'day',
+      includeMotherCode: normalizeIncludeFlag(filters.includeMotherCode, true),
+      includeProductName: normalizeIncludeFlag(filters.includeProductName, true),
+      includeRequestCount: normalizeIncludeFlag(filters.includeRequestCount, true),
+      includePeakPeriod: normalizeIncludeFlag(filters.includePeakPeriod, true),
+      fileName: filters.fileName ?? null,
+    };
+
+    const mockHandler = () => buildExcelExportMock(payload);
+
+    const response = await runWithFallback(
+      'exportCodeStatsToExcel',
+      async () => {
+        const result = await request('/api/v1/code-stats/export', {
+          method: 'POST',
+          body: payload,
+        });
+        if (!result) {
+          throw new Error('پاسخی از سرور دریافت نشد.');
+        }
+        if (result.blob && result.fileName) {
+          return {
+            fileName: ensureXlsxFileName(result.fileName),
+            blob: result.blob,
+          };
+        }
+        if (result.content && typeof result.content === 'string') {
+          const binary = atob(result.content);
+          const length = binary.length;
+          const buffer = new Uint8Array(length);
+          for (let i = 0; i < length; i += 1) {
+            buffer[i] = binary.charCodeAt(i);
+          }
+          const blob = new Blob([buffer], { type: EXCEL_MIME_TYPE });
+          return {
+            fileName: ensureXlsxFileName(result.fileName ?? payload.fileName),
+            blob,
+          };
+        }
+        throw new Error('ساختار خروجی ناشناخته است.');
+      },
+      mockHandler
+    );
+
+    return response;
   },
 
   async refreshCodeNames({ limit } = {}) {
