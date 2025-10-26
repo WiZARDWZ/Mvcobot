@@ -505,6 +505,16 @@ textarea:focus-visible {
   gap: var(--space-3);
 }
 
+.stats-actions {
+  margin-top: auto;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.stats-actions .btn {
+  min-width: 150px;
+}
+
 .page-layout--grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
@@ -937,6 +947,16 @@ textarea:focus-visible {
   transition: transform var(--transition-base), box-shadow var(--transition-base);
 }
 
+.btn__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn.is-loading {
+  pointer-events: none;
+}
+
 .btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
@@ -945,6 +965,31 @@ textarea:focus-visible {
 .btn:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 12px 24px -18px var(--color-shadow);
+}
+
+.button-spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-bottom-color: transparent;
+  display: none;
+  animation: button-spinner 0.75s linear infinite;
+  margin-left: 8px;
+  margin-right: 0;
+}
+
+[dir='rtl'] .button-spinner {
+  margin-left: 0;
+  margin-right: 8px;
+}
+
+.btn.is-loading .button-spinner {
+  display: inline-block;
+}
+
+.btn.is-loading .btn__label {
+  opacity: 0.75;
 }
 
 .btn--primary {
@@ -1473,6 +1518,173 @@ tbody tr:nth-of-type(odd) {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.export-modal__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.export-modal__row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.export-modal__row label {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--color-text);
+}
+
+.export-modal__inputs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-2);
+}
+
+.export-modal__row-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--color-text);
+}
+
+.export-modal__checkboxes {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.export-modal__checkbox {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background-color: var(--color-surface-alt);
+  cursor: pointer;
+  transition: border-color var(--transition-base), box-shadow var(--transition-base);
+}
+
+.export-modal__checkbox:hover,
+.export-modal__checkbox:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.12);
+}
+
+.export-modal__checkbox input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--color-primary);
+  margin-top: 2px;
+}
+
+.export-modal__checkbox-label {
+  font-size: 14px;
+  color: var(--color-text);
+  line-height: 1.5;
+  align-self: center;
+}
+
+.export-modal__checkbox-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  grid-column: 1 / -1;
+  padding-inline-start: 26px;
+}
+
+.export-modal__checkbox-extra label {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  transition: color var(--transition-base);
+}
+
+.export-modal__checkbox-extra label.is-disabled {
+  color: var(--color-text-muted);
+  opacity: 0.6;
+}
+
+.export-modal__checkbox-extra select {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+}
+
+:root[data-theme='dark'] .export-modal__checkbox {
+  background-color: rgba(30, 41, 59, 0.4);
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
+:root[data-theme='dark'] .export-modal__checkbox:hover,
+:root[data-theme='dark'] .export-modal__checkbox:focus-within {
+  border-color: rgba(165, 180, 252, 0.6);
+  box-shadow: 0 0 0 2px rgba(165, 180, 252, 0.18);
+}
+
+:root[data-theme='dark'] .export-modal__checkbox-extra select {
+  background-color: rgba(30, 41, 59, 0.7);
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
+.export-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.export-modal__hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.export-modal__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.export-modal__field input,
+.export-modal__field select {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  font: inherit;
+  background-color: var(--color-surface-alt);
+  color: var(--color-text);
+}
+
+.export-modal__field input:focus,
+.export-modal__field select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.12);
+}
+
+:root[data-theme='dark'] .export-modal__field input,
+:root[data-theme='dark'] .export-modal__field select {
+  background-color: rgba(30, 41, 59, 0.4);
+  border-color: rgba(148, 163, 184, 0.32);
+}
+
+.export-modal__field input::placeholder {
+  color: var(--color-text-muted);
+}
+
+:root[data-theme='dark'] .export-modal__field input::placeholder {
+  color: rgba(148, 163, 184, 0.7);
+}
+
+@keyframes button-spinner {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .badge-stack {
