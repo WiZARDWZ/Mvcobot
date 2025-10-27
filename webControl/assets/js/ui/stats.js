@@ -170,12 +170,9 @@ export async function mount(container) {
     attrs: { 'aria-hidden': 'true' },
     html: `
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
-        <path d="M6.75 3.25h7.5l4.5 4.5v13a.75.75 0 0 1-.75.75h-11.25A.75.75 0 0 1 6 20.75V4a.75.75 0 0 1 .75-.75Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-        <path d="M14.25 3.25v4.5h4.5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-        <path d="M10.2 11.25h-.9a.3.3 0 0 0-.27.17l-1.53 3.07a.3.3 0 0 0 .27.43h.84a.3.3 0 0 0 .27-.17l1.32-2.76" fill="currentColor"/>
-        <path d="M13.8 11.25h.9a.3.3 0 0 1 .27.17l1.53 3.07a.3.3 0 0 1-.27.43h-.84a.3.3 0 0 1-.27-.17l-1.32-2.76" fill="currentColor"/>
-        <path d="M10.2 17.25H9.3a.3.3 0 0 1-.27-.17l-1.53-3.07a.3.3 0 0 1 .27-.43h.84a.3.3 0 0 1 .27.17l1.32 2.76" fill="currentColor"/>
-        <path d="M13.8 17.25h.9a.3.3 0 0 0 .27-.17l1.53-3.07a.3.3 0 0 0-.27-.43h-.84a.3.3 0 0 0-.27.17l-1.32 2.76" fill="currentColor"/>
+        <path d="M13.25 3H7.5A2.5 2.5 0 0 0 5 5.5v13A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5V8.25L13.25 3Z" fill="currentColor" fill-opacity="0.2" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+        <path d="M13.25 3v5.5h5.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M9.15 10.85l5.4 5.4m0-5.4l-5.4 5.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     `,
   });
