@@ -14,8 +14,13 @@ export function escapeHTML(value) {
 
 export function createElement(tag, { classes = [], attrs = {}, text, html } = {}) {
   const element = document.createElement(tag);
-  if (classes.length) {
-    element.classList.add(...classes);
+  const classList = Array.isArray(classes)
+    ? classes.filter(Boolean)
+    : classes
+    ? [classes]
+    : [];
+  if (classList.length) {
+    element.classList.add(...classList);
   }
 
   Object.entries(attrs).forEach(([key, value]) => {
