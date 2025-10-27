@@ -505,14 +505,23 @@ textarea:focus-visible {
   gap: var(--space-3);
 }
 
-.stats-actions {
-  margin-top: auto;
+.stats-footer {
+  margin-top: 24px;
   display: flex;
-  justify-content: flex-end;
+  flex-direction: row-reverse;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
-.stats-actions .btn {
-  min-width: 150px;
+.stats-footer__export {
+  display: flex;
+  align-items: stretch;
+}
+
+.stats-footer__export .btn {
+  min-width: 164px;
 }
 
 .page-layout--grid {
@@ -592,7 +601,6 @@ textarea:focus-visible {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-2);
 }
 
@@ -611,11 +619,6 @@ textarea:focus-visible {
 
 .dashboard-breadcrumb__separator {
   opacity: 0.6;
-}
-
-.dashboard-header__actions {
-  display: flex;
-  gap: var(--space-1);
 }
 
 .dashboard-layout {
@@ -953,6 +956,31 @@ textarea:focus-visible {
   gap: 6px;
 }
 
+.btn__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-inline-start: 6px;
+  color: inherit;
+}
+
+[dir='rtl'] .btn__icon {
+  margin-inline-start: 0;
+  margin-inline-end: 6px;
+}
+
+.btn__icon svg {
+  display: block;
+}
+
+.btn__icon--excel {
+  padding: 3px;
+  border-radius: 6px;
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
 .btn.is-loading {
   pointer-events: none;
 }
@@ -995,6 +1023,21 @@ textarea:focus-visible {
 .btn--primary {
   background-color: var(--color-primary);
   color: #fff;
+}
+
+.btn--excel {
+  background-color: #1f7a3d;
+  color: #fff;
+  box-shadow: 0 18px 38px -26px rgba(31, 122, 61, 0.8);
+}
+
+.btn--excel:hover:not(:disabled) {
+  background-color: #196634;
+}
+
+.btn--excel:focus-visible {
+  outline: 2px solid rgba(31, 122, 61, 0.45);
+  outline-offset: 2px;
 }
 
 .btn--danger {
@@ -1756,7 +1799,7 @@ tbody tr:nth-of-type(odd) {
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
-  margin-top: 16px;
+  margin-top: 0;
 }
 
 .pagination__button {
@@ -1947,6 +1990,22 @@ tbody tr:nth-of-type(odd) {
   }
 
   .main-header__actions .btn {
+    width: 100%;
+  }
+
+  .stats-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .stats-footer__export,
+  .stats-footer__export .btn {
+    width: 100%;
+  }
+
+  .pagination {
+    justify-content: center;
     width: 100%;
   }
 }

@@ -157,26 +157,41 @@ export async function mount(container) {
 
   const layout = createElement('div', { classes: ['page-layout'] });
   const statsCard = createElement('section', { classes: ['card'] });
-  statsCard.append(heading, filterBar, table.wrapper, pagination, loadingState);
-
   const exportButton = createElement('button', {
-    classes: ['btn', 'btn--primary'],
+    classes: ['btn', 'btn--excel'],
     attrs: { type: 'button' },
   });
   const exportSpinner = createElement('span', {
     classes: ['button-spinner'],
     attrs: { 'aria-hidden': 'true' },
   });
+  const exportIcon = createElement('span', {
+    classes: ['btn__icon', 'btn__icon--excel'],
+    attrs: { 'aria-hidden': 'true' },
+    html: `
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+        <path d="M6.75 3.25h7.5l4.5 4.5v13a.75.75 0 0 1-.75.75h-11.25A.75.75 0 0 1 6 20.75V4a.75.75 0 0 1 .75-.75Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="M14.25 3.25v4.5h4.5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="M10.2 11.25h-.9a.3.3 0 0 0-.27.17l-1.53 3.07a.3.3 0 0 0 .27.43h.84a.3.3 0 0 0 .27-.17l1.32-2.76" fill="currentColor"/>
+        <path d="M13.8 11.25h.9a.3.3 0 0 1 .27.17l1.53 3.07a.3.3 0 0 1-.27.43h-.84a.3.3 0 0 1-.27-.17l-1.32-2.76" fill="currentColor"/>
+        <path d="M10.2 17.25H9.3a.3.3 0 0 1-.27-.17l-1.53-3.07a.3.3 0 0 1 .27-.43h.84a.3.3 0 0 1 .27.17l1.32 2.76" fill="currentColor"/>
+        <path d="M13.8 17.25h.9a.3.3 0 0 0 .27-.17l1.53-3.07a.3.3 0 0 0-.27-.43h-.84a.3.3 0 0 0-.27.17l-1.32 2.76" fill="currentColor"/>
+      </svg>
+    `,
+  });
   const exportLabel = createElement('span', {
     classes: ['btn__label'],
     text: 'خروجی اکسل',
   });
-  exportButton.append(exportSpinner, exportLabel);
+  exportButton.append(exportSpinner, exportIcon, exportLabel);
 
-  const actionsBar = createElement('div', { classes: ['stats-actions'] });
-  actionsBar.append(exportButton);
+  const statsFooter = createElement('div', { classes: ['stats-footer'] });
+  const exportWrapper = createElement('div', { classes: ['stats-footer__export'] });
+  exportWrapper.append(exportButton);
+  statsFooter.append(exportWrapper, pagination);
 
-  layout.append(statsCard, actionsBar);
+  statsCard.append(heading, filterBar, table.wrapper, loadingState, statsFooter);
+  layout.append(statsCard);
   container.append(layout);
 
   let currentPage = 1;

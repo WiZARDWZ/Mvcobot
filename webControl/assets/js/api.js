@@ -77,26 +77,35 @@ function deriveMotherCode(code) {
   if (!code || typeof code !== 'string') {
     return '—';
   }
-  const [prefix, suffix = ''] = code.split('-');
-  if (!suffix) {
-    return code;
+  const trimmed = code.trim();
+  if (!trimmed) {
+    return '—';
   }
-  const trunk = suffix.slice(0, -1) || suffix;
-  const variationDigits = ['1', '5'];
-  const variations = variationDigits
-    .map((digit) => `${trunk}${digit}`)
-    .filter((variant) => variant !== suffix);
-  const unique = [suffix, ...variations.filter((variant, index, list) => list.indexOf(variant) === index)];
-  const tail = unique
-    .slice(1)
-    .map((variant) => {
-      if (variant.startsWith(trunk)) {
-        return variant.slice(trunk.length) || variant;
-      }
-      return variant;
-    })
-    .join('/');
-  return tail ? `${prefix}-${suffix}/${tail}` : `${prefix}-${suffix}`;
+  const [prefix, rawSuffix = ''] = trimmed.split('-');
+  if (!rawSuffix) {
+    return trimmed;
+  }
+
+  const suffixMatch = rawSuffix.match(/^(.*?)(\d{3,})$/i);
+  if (!suffixMatch) {
+    return `${prefix}-${rawSuffix}`;
+  }
+
+  const [, , digits] = suffixMatch;
+  const digitLength = digits.length;
+  const baseNumber = Number.parseInt(digits, 10);
+
+  if (!digitLength || Number.isNaN(baseNumber)) {
+    return `${prefix}-${rawSuffix}`;
+  }
+
+  const variations = [1, 5]
+    .map((offset) => (baseNumber + offset).toString().padStart(digitLength, '0'))
+    .filter((value) => value !== digits);
+
+  const uniqueTail = variations.filter((value, index, list) => list.indexOf(value) === index);
+
+  return uniqueTail.length ? `${prefix}-${rawSuffix}/${uniqueTail.join('/')}` : `${prefix}-${rawSuffix}`;
 }
 
 const codeStatsBase = Array.from({ length: 60 }, (_, index) => {
@@ -187,26 +196,6 @@ function ensureXlsxFileName(value, referenceDate = new Date()) {
   return safe.toLowerCase().endsWith('.xlsx') ? safe : `${safe}.xlsx`;
 }
 
-function escapeExcelXml(value) {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
-function columnLetter(index) {
-  let dividend = index;
-  let columnName = '';
-  while (dividend > 0) {
-    const modulo = (dividend - 1) % 26;
-    columnName = String.fromCharCode(65 + modulo) + columnName;
-    dividend = Math.floor((dividend - modulo) / 26);
-  }
-  return columnName || 'A';
-}
-
 function formatReportDate(value) {
   if (!value) return 'نامشخص';
   try {
@@ -265,176 +254,39 @@ function resolveMockRangeKey(peakPeriod) {
 }
 
 async function createExcelBlob(rows) {
-  const { default: JSZip } = await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm');
-  const zip = new JSZip();
-  const maxColumns = rows.reduce((max, row) => Math.max(max, row.length), 0) || 1;
-  const normalizedRows = rows.map((row) => {
-    const next = Array.from(row);
-    while (next.length < maxColumns) {
-      next.push('');
-    }
-    return next;
-  });
-
-  const dimension = `A1:${columnLetter(maxColumns)}${normalizedRows.length}`;
-  const sheetRowsXml = normalizedRows
-    .map((row, rowIndex) => {
-      const cells = row
-        .map((value, cellIndex) => {
-          const cellRef = `${columnLetter(cellIndex + 1)}${rowIndex + 1}`;
-          const text = value == null ? '' : String(value);
-          return `<c r="${cellRef}" t="inlineStr"><is><t>${escapeExcelXml(text)}</t></is></c>`;
-        })
-        .join('');
-      return `<row r="${rowIndex + 1}">${cells}</row>`;
+  const { utils, write } = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
+  const normalizedRows = rows.map((row) =>
+    row.map((value) => {
+      if (value === null || value === undefined) {
+        return '';
+      }
+      if (value instanceof Date) {
+        return value.toISOString();
+      }
+      return typeof value === 'string' ? value : String(value);
     })
-    .join('\n');
+  );
 
-  const columnWidths = Array.from({ length: maxColumns }, (_, index) => {
-    if (index === 2) return 18;
-    if (index === 1) return 34;
-    return 28;
-  });
+  const worksheet = utils.aoa_to_sheet(normalizedRows);
+  const maxColumns = normalizedRows.reduce((max, row) => Math.max(max, row.length), 0);
 
-  const colsXml = columnWidths
-    .map((width, index) => {
-      const position = index + 1;
-      return `<col min="${position}" max="${position}" width="${width}" customWidth="1"/>`;
-    })
-    .join('\n    ');
+  if (maxColumns > 0) {
+    const columnWidths = Array.from({ length: maxColumns }, (_, index) => {
+      if (index === 0) return 32;
+      if (index === 1) return 42;
+      if (index === 2) return 20;
+      return 28;
+    });
+    worksheet['!cols'] = columnWidths.map((width) => ({ wch: width }));
+  }
 
-  const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <sheetViews>
-    <sheetView workbookViewId="0" rightToLeft="1"/>
-  </sheetViews>
-  <sheetFormatPr defaultRowHeight="15"/>
-  <dimension ref="${dimension}"/>
-  <cols>
-    ${colsXml}
-  </cols>
-  <sheetData>
-${sheetRowsXml}
-  </sheetData>
-</worksheet>`;
+  const workbook = utils.book_new();
+  workbook.Workbook = workbook.Workbook || {};
+  workbook.Workbook.Views = [{ RTL: true }];
+  utils.book_append_sheet(workbook, worksheet, 'گزارش');
 
-  const workbookXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <fileVersion appName="xl"/>
-  <workbookPr date1904="false"/>
-  <bookViews>
-    <workbookView xWindow="0" yWindow="0" windowWidth="28800" windowHeight="17600"/>
-  </bookViews>
-  <sheets>
-    <sheet name="گزارش" sheetId="1" r:id="rId1"/>
-  </sheets>
-</workbook>`;
-
-  const workbookRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
-</Relationships>`;
-
-  const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <fonts count="1">
-    <font>
-      <sz val="11"/>
-      <name val="Calibri"/>
-    </font>
-  </fonts>
-  <fills count="1">
-    <fill>
-      <patternFill patternType="none"/>
-    </fill>
-  </fills>
-  <borders count="1">
-    <border>
-      <left/>
-      <right/>
-      <top/>
-      <bottom/>
-      <diagonal/>
-    </border>
-  </borders>
-  <cellStyleXfs count="1">
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
-  </cellStyleXfs>
-  <cellXfs count="1">
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
-  </cellXfs>
-  <cellStyles count="1">
-    <cellStyle name="Normal" xfId="0" builtinId="0"/>
-  </cellStyles>
-</styleSheet>`;
-
-  const contentTypesXml = `<?xml version="1.0" encoding="UTF-8"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
-  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
-  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
-</Types>`;
-
-  const rootRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
-  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
-</Relationships>`;
-
-  const now = new Date();
-  const docPropsCore = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <dc:creator>Mvcobot Control Panel</dc:creator>
-  <cp:lastModifiedBy>Mvcobot Control Panel</cp:lastModifiedBy>
-  <dcterms:created xsi:type="dcterms:W3CDTF">${now.toISOString()}</dcterms:created>
-  <dcterms:modified xsi:type="dcterms:W3CDTF">${now.toISOString()}</dcterms:modified>
-</cp:coreProperties>`;
-
-  const docPropsApp = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
-  <Application>Mvcobot</Application>
-  <DocSecurity>0</DocSecurity>
-  <ScaleCrop>false</ScaleCrop>
-  <HeadingPairs>
-    <vt:vector size="2" baseType="variant">
-      <vt:variant>
-        <vt:lpstr>Worksheets</vt:lpstr>
-      </vt:variant>
-      <vt:variant>
-        <vt:i4>1</vt:i4>
-      </vt:variant>
-    </vt:vector>
-  </HeadingPairs>
-  <TitlesOfParts>
-    <vt:vector size="1" baseType="lpstr">
-      <vt:lpstr>گزارش</vt:lpstr>
-    </vt:vector>
-  </TitlesOfParts>
-  <Company>Mvcobot</Company>
-  <LinksUpToDate>false</LinksUpToDate>
-  <SharedDoc>false</SharedDoc>
-  <HyperlinksChanged>false</HyperlinksChanged>
-  <AppVersion>16.0300</AppVersion>
-</Properties>`;
-
-  zip.file('[Content_Types].xml', contentTypesXml);
-  zip.folder('_rels').file('.rels', rootRelsXml);
-  const docProps = zip.folder('docProps');
-  docProps.file('core.xml', docPropsCore);
-  docProps.file('app.xml', docPropsApp);
-  const xl = zip.folder('xl');
-  xl.file('workbook.xml', workbookXml);
-  xl.folder('_rels').file('workbook.xml.rels', workbookRelsXml);
-  xl.file('styles.xml', stylesXml);
-  xl.folder('worksheets').file('sheet1.xml', sheetXml);
-
-  return zip.generateAsync({ type: 'blob', mimeType: EXCEL_MIME_TYPE });
+  const arrayBuffer = write(workbook, { type: 'array', bookType: 'xlsx' });
+  return new Blob([arrayBuffer], { type: EXCEL_MIME_TYPE });
 }
 
 async function buildExcelExportMock({
@@ -479,7 +331,7 @@ async function buildExcelExportMock({
     selectedColumns.push({
       key: 'productName',
       label: 'نام کالا',
-      value: (item) => item.partName,
+      value: (item) => item.partName ?? '—',
     });
   }
 
@@ -809,7 +661,7 @@ async function runMock(handler) {
   return clone(result);
 }
 
-async function runWithFallback(method, requestFn, mockFn) {
+async function runWithFallback(method, requestFn, mockFn, options = {}) {
   if (isMockMode()) {
     return runMock(mockFn);
   }
@@ -818,7 +670,9 @@ async function runWithFallback(method, requestFn, mockFn) {
     return await requestFn();
   } catch (error) {
     console.warn(`API request failed for ${method}. Falling back to mock data.`, error);
-    emitFallback({ method, error });
+    if (!options?.suppressFallback) {
+      emitFallback({ method, error });
+    }
     return runMock(mockFn);
   }
 }
@@ -956,7 +810,8 @@ export const api = {
         }
         throw new Error('ساختار خروجی ناشناخته است.');
       },
-      mockHandler
+      mockHandler,
+      { suppressFallback: true }
     );
 
     return response;
