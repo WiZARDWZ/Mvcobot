@@ -820,6 +820,152 @@ def fetch_code_statistics(
     return items, len(records)
 
 
+def fetch_code_statistics_for_export(
+    *,
+    date_from: Optional[datetime],
+    date_to: Optional[datetime],
+    min_request_count: Optional[int],
+    include_peak_period: bool,
+    peak_period: str,
+) -> List[Dict[str, Any]]:
+    if not ensure_control_panel_tables():
+        raise RuntimeError("control panel tables are unavailable")
+
+    try:
+        inventory_map = get_inventory_name_map()
+    except Exception:
+        LOGGER.debug("Unable to load inventory name cache", exc_info=True)
+        inventory_map = {}
+
+    filters: List[str] = []
+    params: List[Any] = []
+
+    if date_from is not None:
+        filters.append("requested_at >= ?")
+        params.append(date_from)
+
+    if date_to is not None:
+        filters.append("requested_at <= ?")
+        params.append(date_to)
+
+    where_clause = "WHERE " + " AND ".join(filters) if filters else ""
+
+    peak_join = ""
+    peak_select = "NULL AS peak_period, NULL AS peak_count"
+    peak_group_expression = ""
+
+    if include_peak_period:
+        normalized_period = (peak_period or "day").lower()
+        if normalized_period == "year":
+            peak_group_expression = "CAST(YEAR(f.requested_at) AS NVARCHAR(4))"
+        elif normalized_period == "month":
+            peak_group_expression = (
+                "CONCAT(CAST(YEAR(f.requested_at) AS NVARCHAR(4)), N'-', RIGHT('0' + CAST(MONTH(f.requested_at) AS NVARCHAR(2)), 2))"
+            )
+        else:
+            peak_group_expression = "CONVERT(NVARCHAR(10), f.requested_at, 23)"
+
+        peak_join = f"""
+        OUTER APPLY (
+            SELECT TOP 1
+                {peak_group_expression} AS peak_period,
+                COUNT(*) AS peak_count
+            FROM filtered AS f
+            WHERE f.code_norm = a.code_norm
+              AND f.code_display = a.code_display
+            GROUP BY {peak_group_expression}
+            ORDER BY COUNT(*) DESC, {peak_group_expression} ASC
+        ) AS peak
+        """
+        peak_select = "peak.peak_period, peak.peak_count"
+
+    final_filter_clause = ""
+    final_params = list(params)
+    if min_request_count is not None:
+        final_filter_clause = "WHERE labeled.request_count >= ?"
+        final_params.append(int(min_request_count))
+
+    query = f"""
+        WITH filtered AS (
+            SELECT code_norm, code_display, part_name, requested_at
+            FROM platform_code_log
+            {where_clause}
+        ),
+        aggregated AS (
+            SELECT
+                code_norm,
+                code_display,
+                COUNT(*) AS request_count
+            FROM filtered
+            GROUP BY code_norm, code_display
+        ),
+        labeled AS (
+            SELECT
+                a.code_norm,
+                a.code_display,
+                a.request_count,
+                COALESCE(NULLIF(latest.part_name, ''), '-') AS part_name,
+                {peak_select}
+            FROM aggregated AS a
+            OUTER APPLY (
+                SELECT TOP 1 part_name
+                FROM filtered AS f
+                WHERE f.code_norm = a.code_norm
+                  AND f.code_display = a.code_display
+                ORDER BY
+                    CASE
+                        WHEN f.part_name IS NOT NULL
+                             AND LTRIM(RTRIM(f.part_name)) <> ''
+                             AND f.part_name <> '-' THEN 0
+                        ELSE 1
+                    END,
+                    f.requested_at DESC
+            ) AS latest
+            {peak_join}
+        )
+        SELECT
+            code_norm,
+            code_display,
+            part_name,
+            request_count,
+            peak_period,
+            peak_count
+        FROM labeled
+        {final_filter_clause}
+        ORDER BY request_count DESC, code_display ASC
+    """
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        rows = cur.execute(query, *final_params).fetchall()
+
+    result: List[Dict[str, Any]] = []
+    for row in rows:
+        code_norm_value = (row[0] or "").strip().upper()
+        code_display_value = (row[1] or "").strip()
+        part_name_value = (row[2] or "").strip()
+        request_count_value = int(row[3] or 0)
+        peak_period_value = (row[4] or "").strip() if len(row) > 4 else ""
+        peak_count_value = int(row[5] or 0) if len(row) > 5 and row[5] is not None else 0
+
+        normalized_code = code_norm_value or normalize_code(code_display_value).upper()
+        mapped_name = inventory_map.get(normalized_code, "") if normalized_code else ""
+        final_name = mapped_name or part_name_value or "-"
+
+        result.append(
+            {
+                "code_norm": normalized_code,
+                "code_display": code_display_value,
+                "part_name": final_name,
+                "request_count": request_count_value,
+                "peak_period": peak_period_value,
+                "peak_count": peak_count_value,
+            }
+        )
+
+    return result
+
+
 def refresh_missing_code_names(limit: int = 250) -> int:
     if not ensure_control_panel_tables():
         raise RuntimeError("control panel tables are unavailable")
