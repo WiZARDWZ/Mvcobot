@@ -601,7 +601,6 @@ textarea:focus-visible {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-2);
 }
 
@@ -620,11 +619,6 @@ textarea:focus-visible {
 
 .dashboard-breadcrumb__separator {
   opacity: 0.6;
-}
-
-.dashboard-header__actions {
-  display: flex;
-  gap: var(--space-1);
 }
 
 .dashboard-layout {
