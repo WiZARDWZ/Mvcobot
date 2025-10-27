@@ -73,12 +73,48 @@ const samplePartNames = [
   'میل موجگیر',
 ];
 
+function deriveMotherCode(code) {
+  if (!code || typeof code !== 'string') {
+    return '—';
+  }
+  const trimmed = code.trim();
+  if (!trimmed) {
+    return '—';
+  }
+  const [prefix, rawSuffix = ''] = trimmed.split('-');
+  if (!rawSuffix) {
+    return trimmed;
+  }
+
+  const suffixMatch = rawSuffix.match(/^(.*?)(\d{3,})$/i);
+  if (!suffixMatch) {
+    return `${prefix}-${rawSuffix}`;
+  }
+
+  const [, , digits] = suffixMatch;
+  const digitLength = digits.length;
+  const baseNumber = Number.parseInt(digits, 10);
+
+  if (!digitLength || Number.isNaN(baseNumber)) {
+    return `${prefix}-${rawSuffix}`;
+  }
+
+  const variations = [1, 5]
+    .map((offset) => (baseNumber + offset).toString().padStart(digitLength, '0'))
+    .filter((value) => value !== digits);
+
+  const uniqueTail = variations.filter((value, index, list) => list.indexOf(value) === index);
+
+  return uniqueTail.length ? `${prefix}-${rawSuffix}/${uniqueTail.join('/')}` : `${prefix}-${rawSuffix}`;
+}
+
 const codeStatsBase = Array.from({ length: 60 }, (_, index) => {
   const raw = `${Math.floor(seededRandom() * 9000000000) + 1000000000}`;
   const code = `${raw.slice(0, 5)}-${raw.slice(5, 10)}`;
   const partName = samplePartNames[index % samplePartNames.length];
   const baseCount = Math.floor(seededRandom() * 180 + 15);
-  return { code, partName, baseCount };
+  const motherCode = deriveMotherCode(code);
+  return { code, partName, baseCount, motherCode };
 });
 
 function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize, searchTerm = '' }) {
@@ -97,7 +133,12 @@ function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize, searchTerm = 
   const enriched = codeStatsBase.map((item) => {
     const jitter = Math.floor(seededRandom() * 12);
     const requestCount = Math.max(1, Math.round(item.baseCount * factor + jitter));
-    return { code: item.code, partName: item.partName, requestCount };
+    return {
+      code: item.code,
+      partName: item.partName,
+      requestCount,
+      motherCode: item.motherCode,
+    };
   });
 
   const searchValue = (searchTerm || '').trim().toUpperCase();
@@ -135,6 +176,251 @@ function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize, searchTerm = 
     pageSize: safePageSize,
     total,
     pages,
+  };
+}
+
+const EXCEL_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+const PEAK_PERIOD_LABELS = {
+  day: 'روز',
+  month: 'ماه',
+  year: 'سال',
+};
+
+function ensureXlsxFileName(value, referenceDate = new Date()) {
+  const base = referenceDate instanceof Date && !Number.isNaN(referenceDate.valueOf())
+    ? referenceDate.toISOString().slice(0, 10)
+    : 'report';
+  const trimmed = (value ?? '').toString().trim();
+  const safe = (trimmed || `گزارش-آمار-${base}`).replace(/[\\/:*?"<>|]+/g, '-');
+  return safe.toLowerCase().endsWith('.xlsx') ? safe : `${safe}.xlsx`;
+}
+
+function formatReportDate(value) {
+  if (!value) return 'نامشخص';
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.valueOf())) {
+      return 'نامشخص';
+    }
+    return new Intl.DateTimeFormat('fa-IR', {
+      year: 'numeric',
+      month: 'long',
+      day: '2-digit',
+    }).format(date);
+  } catch (error) {
+    return 'نامشخص';
+  }
+}
+
+function formatReportDateTime(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.valueOf())) {
+    return 'نامشخص';
+  }
+  return new Intl.DateTimeFormat('fa-IR', {
+    year: 'numeric',
+    month: 'long',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function resolvePeakPeriodLabel(value) {
+  return PEAK_PERIOD_LABELS[value] ?? 'نامشخص';
+}
+
+function normalizeIncludeFlag(value, defaultValue = true) {
+  if (value === undefined || value === null) {
+    return defaultValue;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['false', '0', 'no', 'off'].includes(normalized)) {
+      return false;
+    }
+    if (['true', '1', 'yes', 'on'].includes(normalized)) {
+      return true;
+    }
+  }
+  return Boolean(value);
+}
+
+function resolveMockRangeKey(peakPeriod) {
+  if (peakPeriod === 'month') return '3m';
+  if (peakPeriod === 'year') return '1y';
+  return '1m';
+}
+
+async function createExcelBlob(rows) {
+  const { utils, write } = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
+  const normalizedRows = rows.map((row) =>
+    row.map((value) => {
+      if (value === null || value === undefined) {
+        return '';
+      }
+      if (value instanceof Date) {
+        return value.toISOString();
+      }
+      return typeof value === 'string' ? value : String(value);
+    })
+  );
+
+  const worksheet = utils.aoa_to_sheet(normalizedRows);
+  const maxColumns = normalizedRows.reduce((max, row) => Math.max(max, row.length), 0);
+
+  if (maxColumns > 0) {
+    const columnWidths = Array.from({ length: maxColumns }, (_, index) => {
+      if (index === 0) return 32;
+      if (index === 1) return 42;
+      if (index === 2) return 20;
+      return 28;
+    });
+    worksheet['!cols'] = columnWidths.map((width) => ({ wch: width }));
+  }
+
+  const workbook = utils.book_new();
+  workbook.Workbook = workbook.Workbook || {};
+  workbook.Workbook.Views = [{ RTL: true }];
+  utils.book_append_sheet(workbook, worksheet, 'گزارش');
+
+  const arrayBuffer = write(workbook, { type: 'array', bookType: 'xlsx' });
+  return new Blob([arrayBuffer], { type: EXCEL_MIME_TYPE });
+}
+
+async function buildExcelExportMock({
+  from,
+  to,
+  requestCount,
+  peakPeriod,
+  includeMotherCode,
+  includeProductName,
+  includeRequestCount,
+  includePeakPeriod,
+  fileName,
+}) {
+  const now = new Date();
+  const safeFileName = ensureXlsxFileName(fileName, now);
+  const normalizedRequestCount = Number.isFinite(Number(requestCount))
+    ? Number(requestCount)
+    : null;
+
+  const includeMother = normalizeIncludeFlag(includeMotherCode, true);
+  const includeProduct = normalizeIncludeFlag(includeProductName, true);
+  const includeRequests = normalizeIncludeFlag(includeRequestCount, true);
+  const includePeak = normalizeIncludeFlag(includePeakPeriod, true);
+
+  const selectedColumns = [
+    {
+      key: 'code',
+      label: 'کد قطعه',
+      value: (item) => item.code,
+    },
+  ];
+
+  if (includeMother) {
+    selectedColumns.push({
+      key: 'motherCode',
+      label: 'کد مادر (قبل از ساده‌سازی)',
+      value: (item) => item.motherCode ?? item.code,
+    });
+  }
+
+  if (includeProduct) {
+    selectedColumns.push({
+      key: 'productName',
+      label: 'نام کالا',
+      value: (item) => item.partName ?? '—',
+    });
+  }
+
+  if (includeRequests) {
+    selectedColumns.push({
+      key: 'requestCount',
+      label: 'تعداد درخواست',
+      value: (item) => item.requestCount.toLocaleString('fa-IR'),
+    });
+  }
+
+  if (includePeak) {
+    selectedColumns.push({
+      key: 'peakPeriod',
+      label: 'بازه زمانی با بیشترین درخواست',
+      value: () => resolvePeakPeriodLabel(peakPeriod),
+    });
+  }
+
+  if (!selectedColumns.length) {
+    selectedColumns.push({
+      key: 'code',
+      label: 'کد قطعه',
+      value: (item) => item.code,
+    });
+  }
+
+  const columnWidth = Math.max(3, selectedColumns.length);
+  const padRow = (cells) => {
+    const row = cells.slice();
+    while (row.length < columnWidth) {
+      row.push('');
+    }
+    return row;
+  };
+
+  const summaryRows = [
+    padRow(['فیلد', 'مقدار']),
+    padRow(['بازه تاریخ (از)', formatReportDate(from)]),
+    padRow(['بازه تاریخ (تا)', formatReportDate(to)]),
+    padRow([
+      'فیلتر تعداد درخواست',
+      normalizedRequestCount !== null
+        ? `بیش از ${normalizedRequestCount.toLocaleString('fa-IR')} درخواست`
+        : 'بدون فیلتر',
+    ]),
+    padRow(['بازه زمانی با بیشترین درخواست', resolvePeakPeriodLabel(peakPeriod)]),
+    padRow([
+      'ستون‌های خروجی انتخاب‌شده',
+      selectedColumns.map((column) => column.label).join('، ') || '—',
+    ]),
+    padRow([
+      'توضیح کد مادر',
+      'کد مادر همان مقدار استخراج‌شده از پایگاه‌داده پیش از ساده‌سازی است.',
+    ]),
+  ];
+
+  const statsSnapshot = buildMockCodeStats({
+    rangeKey: resolveMockRangeKey(peakPeriod),
+    sortOrder: 'desc',
+    page: 1,
+    pageSize: codeStatsBase.length,
+  });
+
+  let exportItems = statsSnapshot.items;
+  if (normalizedRequestCount !== null) {
+    exportItems = exportItems.filter((item) => item.requestCount > normalizedRequestCount);
+  }
+
+  const tableHeader = padRow(selectedColumns.map((column) => column.label));
+  const tableRows = exportItems.map((item) =>
+    padRow(selectedColumns.map((column) => column.value(item)))
+  );
+
+  const rows = [
+    ...summaryRows,
+    padRow(Array.from({ length: columnWidth }, () => '')),
+    tableHeader,
+    ...tableRows,
+    padRow(Array.from({ length: columnWidth }, () => '')),
+    padRow(['تاریخ تهیه گزارش', formatReportDateTime(now)]),
+  ];
+
+  const blob = await createExcelBlob(rows);
+
+  return {
+    fileName: safeFileName,
+    blob,
+    generatedAt: now.toISOString(),
   };
 }
 
@@ -364,11 +650,18 @@ function emitFallback(detail) {
 
 async function runMock(handler) {
   await delay();
-  const result = handler();
+  const result = await handler();
+  if (result instanceof Blob) {
+    return result;
+  }
+  if (result && typeof result === 'object' && 'blob' in result && result.blob instanceof Blob) {
+    const { blob, ...rest } = result;
+    return { ...clone(rest), blob };
+  }
   return clone(result);
 }
 
-async function runWithFallback(method, requestFn, mockFn) {
+async function runWithFallback(method, requestFn, mockFn, options = {}) {
   if (isMockMode()) {
     return runMock(mockFn);
   }
@@ -377,7 +670,9 @@ async function runWithFallback(method, requestFn, mockFn) {
     return await requestFn();
   } catch (error) {
     console.warn(`API request failed for ${method}. Falling back to mock data.`, error);
-    emitFallback({ method, error });
+    if (!options?.suppressFallback) {
+      emitFallback({ method, error });
+    }
     return runMock(mockFn);
   }
 }
@@ -462,6 +757,64 @@ export const api = {
       () => request(`/api/v1/code-stats?${params.toString()}`),
       mockHandler
     );
+  },
+
+  async exportCodeStatsToExcel(filters = {}) {
+    const payload = {
+      from: filters.dateFrom ?? null,
+      to: filters.dateTo ?? null,
+      requestCount:
+        typeof filters.requestCount === 'number' && !Number.isNaN(filters.requestCount)
+          ? filters.requestCount
+          : filters.requestCount && !Number.isNaN(Number(filters.requestCount))
+          ? Number(filters.requestCount)
+          : null,
+      peakPeriod: filters.peakPeriod ?? 'day',
+      includeMotherCode: normalizeIncludeFlag(filters.includeMotherCode, true),
+      includeProductName: normalizeIncludeFlag(filters.includeProductName, true),
+      includeRequestCount: normalizeIncludeFlag(filters.includeRequestCount, true),
+      includePeakPeriod: normalizeIncludeFlag(filters.includePeakPeriod, true),
+      fileName: filters.fileName ?? null,
+    };
+
+    const mockHandler = () => buildExcelExportMock(payload);
+
+    const response = await runWithFallback(
+      'exportCodeStatsToExcel',
+      async () => {
+        const result = await request('/api/v1/code-stats/export', {
+          method: 'POST',
+          body: payload,
+        });
+        if (!result) {
+          throw new Error('پاسخی از سرور دریافت نشد.');
+        }
+        if (result.blob && result.fileName) {
+          return {
+            fileName: ensureXlsxFileName(result.fileName),
+            blob: result.blob,
+          };
+        }
+        if (result.content && typeof result.content === 'string') {
+          const binary = atob(result.content);
+          const length = binary.length;
+          const buffer = new Uint8Array(length);
+          for (let i = 0; i < length; i += 1) {
+            buffer[i] = binary.charCodeAt(i);
+          }
+          const blob = new Blob([buffer], { type: EXCEL_MIME_TYPE });
+          return {
+            fileName: ensureXlsxFileName(result.fileName ?? payload.fileName),
+            blob,
+          };
+        }
+        throw new Error('ساختار خروجی ناشناخته است.');
+      },
+      mockHandler,
+      { suppressFallback: true }
+    );
+
+    return response;
   },
 
   async refreshCodeNames({ limit } = {}) {

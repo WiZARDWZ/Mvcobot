@@ -298,15 +298,7 @@ export async function mount(container) {
     createElement('span', { classes: ['dashboard-breadcrumb__item', 'is-current'], text: 'داشبورد' })
   );
 
-  const headerActions = createElement('div', { classes: ['dashboard-header__actions'] });
-  const refreshActionButton = createElement('button', {
-    classes: ['btn', 'btn--ghost', 'dashboard-header__action'],
-    attrs: { type: 'button', 'data-action': 'refresh' },
-    text: 'به‌روزرسانی داده‌ها',
-  });
-  headerActions.append(refreshActionButton);
-
-  header.append(breadcrumb, headerActions);
+  header.append(breadcrumb);
 
   const layout = createElement('div', { classes: ['dashboard-layout'] });
 
@@ -344,11 +336,6 @@ export async function mount(container) {
   container.appendChild(loadingState);
 
   let metrics = null;
-
-  function handleRefreshClick(event) {
-    event?.preventDefault?.();
-    fetchData(true);
-  }
 
   async function fetchData(showToast = false) {
     loadingState.textContent = 'در حال بارگذاری...';
@@ -513,10 +500,6 @@ export async function mount(container) {
     hoursListWrapper.append(renderWorkingHoursList(workingHours));
   }
 
-  if (refreshActionButton) {
-    refreshActionButton.addEventListener('click', handleRefreshClick);
-  }
-
   await fetchData();
 
   return {
@@ -525,9 +508,6 @@ export async function mount(container) {
     },
     destroy() {
       destroyCharts();
-      if (refreshActionButton) {
-        refreshActionButton.removeEventListener('click', handleRefreshClick);
-      }
     },
   };
 }

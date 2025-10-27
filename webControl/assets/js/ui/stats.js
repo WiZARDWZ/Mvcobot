@@ -4,6 +4,7 @@ import {
   createLoadingState,
   createTable,
   debounce,
+  renderModal,
   renderToast,
 } from './components.js';
 
@@ -19,6 +20,12 @@ const RANGE_OPTIONS = [
 const SORT_OPTIONS = [
   { value: 'desc', label: 'بیشترین درخواست' },
   { value: 'asc', label: 'کمترین درخواست' },
+];
+
+const PEAK_PERIOD_OPTIONS = [
+  { value: 'day', label: 'روز' },
+  { value: 'month', label: 'ماه' },
+  { value: 'year', label: 'سال' },
 ];
 
 function createCodeChip(code) {
@@ -150,7 +157,40 @@ export async function mount(container) {
 
   const layout = createElement('div', { classes: ['page-layout'] });
   const statsCard = createElement('section', { classes: ['card'] });
-  statsCard.append(heading, filterBar, table.wrapper, pagination, loadingState);
+  const exportButton = createElement('button', {
+    classes: ['btn', 'btn--excel'],
+    attrs: { type: 'button' },
+  });
+  const exportSpinner = createElement('span', {
+    classes: ['button-spinner'],
+    attrs: { 'aria-hidden': 'true' },
+  });
+  const exportIcon = createElement('span', {
+    classes: ['btn__icon', 'btn__icon--excel'],
+    attrs: { 'aria-hidden': 'true' },
+    html: `
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+        <path d="M6.75 3.25h7.5l4.5 4.5v13a.75.75 0 0 1-.75.75h-11.25A.75.75 0 0 1 6 20.75V4a.75.75 0 0 1 .75-.75Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="M14.25 3.25v4.5h4.5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="M10.2 11.25h-.9a.3.3 0 0 0-.27.17l-1.53 3.07a.3.3 0 0 0 .27.43h.84a.3.3 0 0 0 .27-.17l1.32-2.76" fill="currentColor"/>
+        <path d="M13.8 11.25h.9a.3.3 0 0 1 .27.17l1.53 3.07a.3.3 0 0 1-.27.43h-.84a.3.3 0 0 1-.27-.17l-1.32-2.76" fill="currentColor"/>
+        <path d="M10.2 17.25H9.3a.3.3 0 0 1-.27-.17l-1.53-3.07a.3.3 0 0 1 .27-.43h.84a.3.3 0 0 1 .27.17l1.32 2.76" fill="currentColor"/>
+        <path d="M13.8 17.25h.9a.3.3 0 0 0 .27-.17l1.53-3.07a.3.3 0 0 0-.27-.43h-.84a.3.3 0 0 0-.27.17l-1.32 2.76" fill="currentColor"/>
+      </svg>
+    `,
+  });
+  const exportLabel = createElement('span', {
+    classes: ['btn__label'],
+    text: 'خروجی اکسل',
+  });
+  exportButton.append(exportSpinner, exportIcon, exportLabel);
+
+  const statsFooter = createElement('div', { classes: ['stats-footer'] });
+  const exportWrapper = createElement('div', { classes: ['stats-footer__export'] });
+  exportWrapper.append(exportButton);
+  statsFooter.append(exportWrapper, pagination);
+
+  statsCard.append(heading, filterBar, table.wrapper, loadingState, statsFooter);
   layout.append(statsCard);
   container.append(layout);
 
@@ -160,6 +200,28 @@ export async function mount(container) {
   let totalItems = 0;
   let isLoading = false;
   let isRefreshingNames = false;
+
+  function sanitizeFileName(value, fallback) {
+    const base = (value ?? '').toString().trim() || fallback || 'گزارش-آمار';
+    const cleaned = base.replace(/[\\/:*?"<>|]+/g, '-');
+    const normalized = cleaned.replace(/\.(xlsx?|XLSX?)$/i, '');
+    const safe = normalized || 'گزارش-آمار';
+    return `${safe}.xlsx`;
+  }
+
+  function triggerDownload(blob, fileName) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.style.display = 'none';
+    document.body.appendChild(anchor);
+    anchor.click();
+    window.setTimeout(() => {
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+    }, 0);
+  }
 
   rangeSelect.value = '1m';
   sortSelect.value = 'desc';
@@ -241,6 +303,326 @@ export async function mount(container) {
     }
   }
 
+  function openExportModal() {
+    const suffix = Math.random().toString(16).slice(2);
+    const today = new Date().toISOString().slice(0, 10);
+    const defaultFileName = sanitizeFileName('', `گزارش-آمار-${today}`);
+
+    const form = createElement('form', { classes: ['export-modal__form'] });
+
+    const dateRow = createElement('div', { classes: ['export-modal__row'] });
+    const dateRowLabel = createElement('label', {
+      attrs: { for: `export-date-from-${suffix}` },
+      text: 'بازه‌ی تاریخ',
+    });
+    const dateInputs = createElement('div', { classes: ['export-modal__inputs'] });
+
+    const dateFromField = createElement('div', { classes: ['export-modal__field'] });
+    const dateFromLabel = createElement('label', {
+      attrs: { for: `export-date-from-${suffix}` },
+      text: 'از تاریخ',
+    });
+    const dateFromInput = createElement('input', {
+      attrs: {
+        type: 'date',
+        id: `export-date-from-${suffix}`,
+        name: 'dateFrom',
+      },
+    });
+    dateFromField.append(dateFromLabel, dateFromInput);
+
+    const dateToField = createElement('div', { classes: ['export-modal__field'] });
+    const dateToLabel = createElement('label', {
+      attrs: { for: `export-date-to-${suffix}` },
+      text: 'تا تاریخ',
+    });
+    const dateToInput = createElement('input', {
+      attrs: {
+        type: 'date',
+        id: `export-date-to-${suffix}`,
+        name: 'dateTo',
+      },
+    });
+    dateToField.append(dateToLabel, dateToInput);
+
+    dateInputs.append(dateFromField, dateToField);
+    dateRow.append(dateRowLabel, dateInputs);
+
+    const requestRow = createElement('div', { classes: ['export-modal__row'] });
+    const requestLabel = createElement('label', {
+      attrs: { for: `export-request-${suffix}` },
+      text: 'اطلاعات آماری',
+    });
+    const requestInputs = createElement('div', { classes: ['export-modal__inputs'] });
+
+    const requestCountField = createElement('div', { classes: ['export-modal__field'] });
+    const requestCountLabel = createElement('label', {
+      attrs: { for: `export-request-${suffix}` },
+      text: 'حداقل تعداد درخواست',
+    });
+    const requestCountInput = createElement('input', {
+      attrs: {
+        type: 'number',
+        id: `export-request-${suffix}`,
+        name: 'requestCount',
+        min: '0',
+        step: '1',
+        placeholder: 'مثال: 5',
+        inputmode: 'numeric',
+      },
+    });
+    requestCountField.append(requestCountLabel, requestCountInput);
+
+    const peakSelect = createElement('select', {
+      attrs: {
+        id: `export-peak-${suffix}`,
+        name: 'peakPeriod',
+      },
+    });
+    PEAK_PERIOD_OPTIONS.forEach((option) => {
+      const opt = createElement('option', {
+        text: option.label,
+        attrs: { value: option.value },
+      });
+      peakSelect.appendChild(opt);
+    });
+    peakSelect.value = 'day';
+    const requestHint = createElement('p', {
+      classes: ['export-modal__hint'],
+      text: 'اگر این فیلد خالی باشد، تمام رکوردها صادر می‌شوند؛ در صورت وارد کردن مقدار، فقط رکوردهای با تعداد درخواست بیش از عدد وارد شده خروجی خواهند شد.',
+    });
+
+    requestInputs.append(requestCountField, requestHint);
+    requestRow.append(requestLabel, requestInputs);
+
+    const columnsRow = createElement('div', { classes: ['export-modal__row'] });
+    const columnsTitle = createElement('span', {
+      classes: ['export-modal__row-title'],
+      text: 'ستون‌های خروجی اکسل',
+    });
+    const columnsInputs = createElement('div', { classes: ['export-modal__checkboxes'] });
+
+    const alwaysIncludedNotice = createElement('p', {
+      classes: ['export-modal__hint'],
+      text: 'ستون «کد قطعه» به صورت ثابت در تمامی خروجی‌ها قرار می‌گیرد.',
+    });
+
+    function createColumnCheckbox({ id, name, label }) {
+      const field = createElement('label', {
+        classes: ['export-modal__checkbox'],
+        attrs: { for: `${id}-${suffix}` },
+      });
+      const checkbox = createElement('input', {
+        attrs: {
+          type: 'checkbox',
+          id: `${id}-${suffix}`,
+          name,
+        },
+      });
+      checkbox.checked = true;
+      const caption = createElement('span', { classes: ['export-modal__checkbox-label'], text: label });
+      field.append(checkbox, caption);
+      return { field, checkbox };
+    }
+
+    const motherColumn = createColumnCheckbox({
+      id: 'export-column-mother',
+      name: 'includeMotherCode',
+      label: 'کد مادر (قبل از ساده‌سازی)',
+    });
+    const productColumn = createColumnCheckbox({
+      id: 'export-column-product',
+      name: 'includeProductName',
+      label: 'نام کالا',
+    });
+    const requestColumn = createColumnCheckbox({
+      id: 'export-column-requests',
+      name: 'includeRequestCount',
+      label: 'تعداد درخواست',
+    });
+    const peakColumn = createColumnCheckbox({
+      id: 'export-column-peak',
+      name: 'includePeakPeriod',
+      label: 'ستون بازه زمانی با بیشترین درخواست',
+    });
+
+    const peakControls = createElement('div', { classes: ['export-modal__checkbox-extra'] });
+    const peakControlsLabel = createElement('label', {
+      attrs: { for: `export-peak-${suffix}` },
+      text: 'نوع بازه (روز / ماه / سال)',
+    });
+    peakControls.append(peakControlsLabel, peakSelect);
+    peakColumn.field.appendChild(peakControls);
+
+    columnsInputs.append(
+      motherColumn.field,
+      productColumn.field,
+      requestColumn.field,
+      peakColumn.field
+    );
+    columnsRow.append(columnsTitle, columnsInputs, alwaysIncludedNotice);
+
+    const syncPeakControls = () => {
+      peakSelect.disabled = !peakColumn.checkbox.checked;
+      peakControlsLabel.classList.toggle('is-disabled', peakSelect.disabled);
+    };
+
+    peakColumn.checkbox.addEventListener('change', syncPeakControls);
+    syncPeakControls();
+
+    const fileField = createElement('div', { classes: ['export-modal__field'] });
+    const fileLabel = createElement('label', {
+      attrs: { for: `export-file-${suffix}` },
+      text: 'نام فایل خروجی اکسل',
+    });
+    const fileInput = createElement('input', {
+      attrs: {
+        type: 'text',
+        id: `export-file-${suffix}`,
+        name: 'fileName',
+        placeholder: 'مثال: report.xlsx',
+        autocomplete: 'off',
+      },
+    });
+    fileInput.value = defaultFileName;
+    fileInput.setAttribute('dir', 'ltr');
+    fileField.append(fileLabel, fileInput);
+
+    const hint = createElement('p', {
+      classes: ['export-modal__hint'],
+      text: 'در صورت وارد نکردن پسوند ‎.xlsx‎، به صورت خودکار به انتهای نام فایل افزوده می‌شود.',
+    });
+
+    const actions = createElement('div', { classes: ['export-modal__actions'] });
+    const cancelButton = createElement('button', {
+      classes: ['btn', 'btn--ghost'],
+      attrs: { type: 'button' },
+      text: 'انصراف',
+    });
+    const downloadButton = createElement('button', {
+      classes: ['btn', 'btn--primary'],
+      attrs: { type: 'submit' },
+    });
+    const downloadSpinner = createElement('span', {
+      classes: ['button-spinner'],
+      attrs: { 'aria-hidden': 'true' },
+    });
+    const downloadLabel = createElement('span', {
+      classes: ['btn__label'],
+      text: 'دریافت خروجی',
+    });
+    downloadButton.append(downloadSpinner, downloadLabel);
+    actions.append(cancelButton, downloadButton);
+
+    form.append(dateRow, requestRow, columnsRow, fileField, hint, actions);
+
+    let isSubmitting = false;
+
+    const setSubmitting = (state) => {
+      isSubmitting = state;
+      downloadButton.classList.toggle('is-loading', state);
+      downloadButton.disabled = state;
+      cancelButton.disabled = state;
+      [
+        dateFromInput,
+        dateToInput,
+        requestCountInput,
+        peakSelect,
+        fileInput,
+        motherColumn.checkbox,
+        productColumn.checkbox,
+        requestColumn.checkbox,
+        peakColumn.checkbox,
+      ].forEach((input) => {
+        input.disabled = state;
+      });
+      if (!state) {
+        syncPeakControls();
+      }
+    };
+
+    const handleCancel = (event) => {
+      event.preventDefault();
+      closeModal();
+    };
+
+    const handleSubmit = async (event) => {
+      event.preventDefault();
+      if (isSubmitting) return;
+
+      const formData = new FormData(form);
+      const rawRequestCount = formData.get('requestCount');
+      let normalizedRequestCount = null;
+      if (rawRequestCount !== null && rawRequestCount !== '') {
+        const numericValue = Number(rawRequestCount);
+        if (Number.isNaN(numericValue)) {
+          renderToast({ message: 'مقدار تعداد درخواست معتبر نیست.', type: 'error' });
+          return;
+        }
+        normalizedRequestCount = numericValue;
+      }
+
+      const peakPeriodValue = peakSelect.value || formData.get('peakPeriod') || 'day';
+
+      const payload = {
+        dateFrom: formData.get('dateFrom') || null,
+        dateTo: formData.get('dateTo') || null,
+        requestCount: normalizedRequestCount,
+        peakPeriod: peakPeriodValue,
+        includeMotherCode: formData.has('includeMotherCode'),
+        includeProductName: formData.has('includeProductName'),
+        includeRequestCount: formData.has('includeRequestCount'),
+        includePeakPeriod: formData.has('includePeakPeriod'),
+        fileName: sanitizeFileName(formData.get('fileName'), defaultFileName),
+      };
+
+      if (payload.dateFrom && payload.dateTo) {
+        const fromDate = new Date(payload.dateFrom);
+        const toDate = new Date(payload.dateTo);
+        if (!Number.isNaN(fromDate.valueOf()) && !Number.isNaN(toDate.valueOf()) && fromDate > toDate) {
+          renderToast({ message: 'تاریخ شروع نمی‌تواند بعد از تاریخ پایان باشد.', type: 'error' });
+          return;
+        }
+      }
+
+      setSubmitting(true);
+      try {
+        const result = await api.exportCodeStatsToExcel(payload);
+        if (!result || !(result.blob instanceof Blob)) {
+          throw new Error('Invalid export payload');
+        }
+        const fileName = result.fileName || payload.fileName;
+        triggerDownload(result.blob, fileName);
+        renderToast({ message: 'خروجی اکسل با موفقیت آماده شد.' });
+        closeModal();
+      } catch (error) {
+        console.error('Failed to export code statistics', error);
+        renderToast({ message: 'دریافت خروجی ناموفق بود.', type: 'error' });
+        setSubmitting(false);
+      }
+    };
+
+    const closeModal = () => {
+      cancelButton.removeEventListener('click', handleCancel);
+      form.removeEventListener('submit', handleSubmit);
+      peakColumn.checkbox.removeEventListener('change', syncPeakControls);
+      modalHandle.close();
+    };
+
+    const modalHandle = renderModal({
+      title: 'دریافت خروجی اکسل',
+      content: form,
+      onClose: () => {
+        cancelButton.removeEventListener('click', handleCancel);
+        form.removeEventListener('submit', handleSubmit);
+        peakColumn.checkbox.removeEventListener('change', syncPeakControls);
+      },
+    });
+
+    cancelButton.addEventListener('click', handleCancel);
+    form.addEventListener('submit', handleSubmit);
+  }
+
   async function handleRefreshNames() {
     if (isRefreshingNames || isLoading) {
       return;
@@ -276,6 +658,7 @@ export async function mount(container) {
   searchInput.addEventListener('input', onSearchInput);
   searchInput.addEventListener('keydown', handleSearchKeyDown);
   refreshButton.addEventListener('click', handleRefreshNames);
+  exportButton.addEventListener('click', openExportModal);
 
   await loadStats();
 
@@ -293,6 +676,7 @@ export async function mount(container) {
       searchInput.removeEventListener('input', onSearchInput);
       searchInput.removeEventListener('keydown', handleSearchKeyDown);
       refreshButton.removeEventListener('click', handleRefreshNames);
+      exportButton.removeEventListener('click', openExportModal);
     },
   };
 }
