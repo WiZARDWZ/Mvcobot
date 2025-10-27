@@ -73,12 +73,66 @@ const samplePartNames = [
   'میل موجگیر',
 ];
 
+function deriveMotherCode(code) {
+  if (!code || typeof code !== 'string') {
+    return '—';
+  }
+  const trimmed = code.trim();
+  if (!trimmed) {
+    return '—';
+  }
+  const [prefix, rawSuffix = ''] = trimmed.split('-');
+  if (!rawSuffix) {
+    return trimmed;
+  }
+
+  const suffixMatch = rawSuffix.match(/^(.*?)(\d{3,})$/i);
+  if (!suffixMatch) {
+    return `${prefix}-${rawSuffix}`;
+  }
+
+  const [, , digits] = suffixMatch;
+  const digitLength = digits.length;
+  const baseNumber = Number.parseInt(digits, 10);
+
+  if (!digitLength || Number.isNaN(baseNumber)) {
+    return `${prefix}-${rawSuffix}`;
+  }
+
+  const variations = [1, 5]
+    .map((offset) => (baseNumber + offset).toString().padStart(digitLength, '0'))
+    .filter((value) => value !== digits);
+
+  const uniqueTail = variations.filter((value, index, list) => list.indexOf(value) === index);
+
+  return uniqueTail.length ? `${prefix}-${rawSuffix}/${uniqueTail.join('/')}` : `${prefix}-${rawSuffix}`;
+}
+
 const codeStatsBase = Array.from({ length: 60 }, (_, index) => {
   const raw = `${Math.floor(seededRandom() * 9000000000) + 1000000000}`;
   const code = `${raw.slice(0, 5)}-${raw.slice(5, 10)}`;
   const partName = samplePartNames[index % samplePartNames.length];
   const baseCount = Math.floor(seededRandom() * 180 + 15);
-  return { code, partName, baseCount };
+  const motherCode = deriveMotherCode(code);
+
+  const daysBack = Math.floor(seededRandom() * 240 + 10);
+  const peakDate = new Date();
+  peakDate.setHours(12, 0, 0, 0);
+  peakDate.setDate(peakDate.getDate() - daysBack);
+  const peakMonthDate = new Date(peakDate.getFullYear(), peakDate.getMonth(), 1);
+  const peakMonthName = new Intl.DateTimeFormat('fa-IR', { month: 'long' }).format(peakMonthDate);
+  const peakYear = peakDate.getFullYear();
+
+  return {
+    code,
+    partName,
+    baseCount,
+    motherCode,
+    peakDayISO: peakDate.toISOString().slice(0, 10),
+    peakMonthISO: peakMonthDate.toISOString().slice(0, 7),
+    peakMonthName,
+    peakYear,
+  };
 });
 
 function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize, searchTerm = '' }) {
@@ -97,7 +151,22 @@ function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize, searchTerm = 
   const enriched = codeStatsBase.map((item) => {
     const jitter = Math.floor(seededRandom() * 12);
     const requestCount = Math.max(1, Math.round(item.baseCount * factor + jitter));
-    return { code: item.code, partName: item.partName, requestCount };
+    return {
+      code: item.code,
+      partName: item.partName,
+      requestCount,
+      motherCode: item.motherCode,
+      peak: {
+        dayISO: item.peakDayISO,
+        monthISO: item.peakMonthISO,
+        monthName: item.peakMonthName,
+        year: item.peakYear,
+      },
+      peakDayISO: item.peakDayISO,
+      peakMonthISO: item.peakMonthISO,
+      peakMonthName: item.peakMonthName,
+      peakYear: item.peakYear,
+    };
   });
 
   const searchValue = (searchTerm || '').trim().toUpperCase();
@@ -135,6 +204,542 @@ function buildMockCodeStats({ rangeKey, sortOrder, page, pageSize, searchTerm = 
     pageSize: safePageSize,
     total,
     pages,
+  };
+}
+
+const EXCEL_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+const PEAK_PERIOD_LABELS = {
+  day: 'روز',
+  month: 'ماه',
+  year: 'سال',
+};
+
+function ensureXlsxFileName(value, referenceDate = new Date()) {
+  const base = referenceDate instanceof Date && !Number.isNaN(referenceDate.valueOf())
+    ? referenceDate.toISOString().slice(0, 10)
+    : 'report';
+  const trimmed = (value ?? '').toString().trim();
+  const safe = (trimmed || `گزارش-آمار-${base}`).replace(/[\\/:*?"<>|]+/g, '-');
+  return safe.toLowerCase().endsWith('.xlsx') ? safe : `${safe}.xlsx`;
+}
+
+function formatReportDate(value) {
+  if (!value) return 'نامشخص';
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.valueOf())) {
+      return 'نامشخص';
+    }
+    return new Intl.DateTimeFormat('fa-IR', {
+      year: 'numeric',
+      month: 'long',
+      day: '2-digit',
+    }).format(date);
+  } catch (error) {
+    return 'نامشخص';
+  }
+}
+
+function formatReportDateTime(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.valueOf())) {
+    return 'نامشخص';
+  }
+  return new Intl.DateTimeFormat('fa-IR', {
+    year: 'numeric',
+    month: 'long',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function resolvePeakPeriodLabel(value) {
+  return PEAK_PERIOD_LABELS[value] ?? 'نامشخص';
+}
+
+function safeFormatReportDate(value) {
+  if (!value && value !== 0) {
+    return null;
+  }
+  const formatted = formatReportDate(value);
+  return formatted === 'نامشخص' ? null : formatted;
+}
+
+function tryFormatMonthName(value) {
+  if (!value && value !== 0) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    const date = new Date(value.getFullYear(), value.getMonth(), 1);
+    if (!Number.isNaN(date.valueOf())) {
+      return new Intl.DateTimeFormat('fa-IR', { month: 'long' }).format(date);
+    }
+    return null;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const index = Math.max(0, Math.round(value) - 1);
+    const monthDate = new Date(2000, index, 1);
+    if (!Number.isNaN(monthDate.valueOf())) {
+      return new Intl.DateTimeFormat('fa-IR', { month: 'long' }).format(monthDate);
+    }
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const isoMatch = trimmed.match(/^(\d{4})[-/](\d{1,2})$/);
+    if (isoMatch) {
+      const [, year, month] = isoMatch;
+      const date = new Date(Number(year), Number(month) - 1, 1);
+      if (!Number.isNaN(date.valueOf())) {
+        return new Intl.DateTimeFormat('fa-IR', { month: 'long' }).format(date);
+      }
+    }
+
+    const reversedMatch = trimmed.match(/^(\d{1,2})[-/](\d{4})$/);
+    if (reversedMatch) {
+      const [, month, year] = reversedMatch;
+      const date = new Date(Number(year), Number(month) - 1, 1);
+      if (!Number.isNaN(date.valueOf())) {
+        return new Intl.DateTimeFormat('fa-IR', { month: 'long' }).format(date);
+      }
+    }
+
+    const parsed = new Date(trimmed);
+    if (!Number.isNaN(parsed.valueOf())) {
+      return new Intl.DateTimeFormat('fa-IR', { month: 'long' }).format(parsed);
+    }
+
+    return trimmed;
+  }
+
+  if (value && typeof value === 'object') {
+    const nested =
+      value.monthName ??
+      value.month ??
+      value.name ??
+      value.label ??
+      value.value ??
+      value.iso ??
+      value.text;
+    if (nested) {
+      return tryFormatMonthName(nested);
+    }
+  }
+
+  return null;
+}
+
+function tryFormatYearValue(value) {
+  if (!value && value !== 0) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    if (!Number.isNaN(value.valueOf())) {
+      return new Intl.DateTimeFormat('fa-IR', { year: 'numeric' }).format(value);
+    }
+    return null;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value.toLocaleString('fa-IR');
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const numeric = Number(trimmed);
+    if (!Number.isNaN(numeric)) {
+      return numeric.toLocaleString('fa-IR');
+    }
+    return trimmed;
+  }
+
+  if (value && typeof value === 'object') {
+    const nested = value.year ?? value.value ?? value.label ?? value.text ?? value.iso;
+    if (nested) {
+      return tryFormatYearValue(nested);
+    }
+  }
+
+  return null;
+}
+
+function normalizeDateCandidate(candidate) {
+  if (!candidate && candidate !== 0) {
+    return null;
+  }
+  if (candidate instanceof Date) {
+    return safeFormatReportDate(candidate);
+  }
+  if (typeof candidate === 'number') {
+    const date = new Date(candidate);
+    if (!Number.isNaN(date.valueOf())) {
+      return safeFormatReportDate(date);
+    }
+    return null;
+  }
+  if (typeof candidate === 'string') {
+    const trimmed = candidate.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const formatted = safeFormatReportDate(trimmed);
+    if (formatted) {
+      return formatted;
+    }
+    const isoMatch = trimmed.match(/^(\d{4})[-/](\d{2})[-/](\d{2})$/);
+    if (isoMatch) {
+      const [year, month, day] = isoMatch.slice(1).map((part) => Number(part));
+      const date = new Date(year, month - 1, day);
+      if (!Number.isNaN(date.valueOf())) {
+        const alt = safeFormatReportDate(date);
+        if (alt) {
+          return alt;
+        }
+      }
+    }
+    return trimmed;
+  }
+  if (candidate && typeof candidate === 'object') {
+    const nested =
+      candidate.date ??
+      candidate.day ??
+      candidate.iso ??
+      candidate.value ??
+      candidate.text ??
+      candidate.label;
+    if (nested) {
+      return normalizeDateCandidate(nested);
+    }
+  }
+  return null;
+}
+
+function getPeakPeriodCellValue(item, peakPeriod) {
+  if (!item) {
+    return resolvePeakPeriodLabel(peakPeriod);
+  }
+
+  const sources = [
+    item,
+    item.peak,
+    item.peakPeriod,
+    item.peakPeriodInfo,
+    item.peakPeriodDetails,
+  ];
+
+  const findFromSources = (keys, normalizer) => {
+    for (const source of sources) {
+      if (!source || typeof source !== 'object') {
+        continue;
+      }
+      for (const key of keys) {
+        if (Object.prototype.hasOwnProperty.call(source, key)) {
+          const formatted = normalizer(source[key]);
+          if (formatted) {
+            return formatted;
+          }
+        }
+      }
+    }
+    return null;
+  };
+
+  if (peakPeriod === 'day') {
+    const dayValue = findFromSources(
+      [
+        'peakDayISO',
+        'peakDay',
+        'peakDateISO',
+        'peakDate',
+        'peak_date',
+        'day',
+        'dayISO',
+        'date',
+        'dateISO',
+        'value',
+        'text',
+        'label',
+      ],
+      normalizeDateCandidate
+    );
+    if (dayValue) {
+      return dayValue;
+    }
+  } else if (peakPeriod === 'month') {
+    const monthValue = findFromSources(
+      [
+        'peakMonthName',
+        'peakMonthISO',
+        'peakMonth',
+        'monthName',
+        'month',
+        'monthISO',
+        'monthKey',
+        'value',
+        'text',
+        'label',
+      ],
+      tryFormatMonthName
+    );
+    if (monthValue) {
+      return monthValue;
+    }
+  } else if (peakPeriod === 'year') {
+    const yearValue = findFromSources(
+      ['peakYear', 'year', 'yearValue', 'value', 'text', 'label'],
+      tryFormatYearValue
+    );
+    if (yearValue) {
+      return yearValue;
+    }
+  }
+
+  return resolvePeakPeriodLabel(peakPeriod);
+}
+
+function normalizeIncludeFlag(value, defaultValue = true) {
+  if (value === undefined || value === null) {
+    return defaultValue;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['false', '0', 'no', 'off'].includes(normalized)) {
+      return false;
+    }
+    if (['true', '1', 'yes', 'on'].includes(normalized)) {
+      return true;
+    }
+  }
+  return Boolean(value);
+}
+
+function resolveMockRangeKey(peakPeriod) {
+  if (peakPeriod === 'month') return '3m';
+  if (peakPeriod === 'year') return '1y';
+  return '1m';
+}
+
+function extractFileNameFromDisposition(disposition) {
+  if (typeof disposition !== 'string') {
+    return null;
+  }
+
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match && utf8Match[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch (error) {
+      return utf8Match[1];
+    }
+  }
+
+  const quotedMatch = disposition.match(/filename="?([^";]+)"?/i);
+  if (quotedMatch && quotedMatch[1]) {
+    return quotedMatch[1];
+  }
+
+  return null;
+}
+
+async function createExcelBlob(rows) {
+  const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
+  const normalizedRows = rows.map((row) =>
+    row.map((value) => {
+      if (value === null || value === undefined) {
+        return '';
+      }
+      if (value instanceof Date) {
+        return value;
+      }
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+      }
+      if (typeof value === 'boolean') {
+        return value ? 'بله' : 'خیر';
+      }
+      return value.toString();
+    })
+  );
+
+  const worksheet = XLSX.utils.aoa_to_sheet(normalizedRows);
+  const maxColumns = normalizedRows.reduce((max, row) => Math.max(max, row.length), 0);
+
+  if (maxColumns > 0) {
+    const columnWidths = Array.from({ length: maxColumns }, (_, index) => {
+      if (index === 0) return 32;
+      if (index === 1) return 42;
+      if (index === 2) return 20;
+      return 28;
+    });
+    worksheet['!cols'] = columnWidths.map((width) => ({ wch: width }));
+  }
+
+  const workbook = XLSX.utils.book_new();
+  if (!workbook.Workbook || typeof workbook.Workbook !== 'object') {
+    workbook.Workbook = { Views: [{ RTL: true }] };
+  } else {
+    workbook.Workbook.Views = [{ RTL: true }];
+  }
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'گزارش');
+
+  const arrayBuffer = XLSX.write(workbook, {
+    type: 'array',
+    bookType: 'xlsx',
+    compression: true,
+  });
+  return new Blob([arrayBuffer], { type: EXCEL_MIME_TYPE });
+}
+
+async function buildExcelExportMock({
+  from,
+  to,
+  requestCount,
+  peakPeriod,
+  includeMotherCode,
+  includeProductName,
+  includeRequestCount,
+  includePeakPeriod,
+  fileName,
+}) {
+  const now = new Date();
+  const safeFileName = ensureXlsxFileName(fileName, now);
+  const normalizedRequestCount = Number.isFinite(Number(requestCount))
+    ? Number(requestCount)
+    : null;
+
+  const includeMother = normalizeIncludeFlag(includeMotherCode, true);
+  const includeProduct = normalizeIncludeFlag(includeProductName, true);
+  const includeRequests = normalizeIncludeFlag(includeRequestCount, true);
+  const includePeak = normalizeIncludeFlag(includePeakPeriod, true);
+
+  const selectedColumns = [
+    {
+      key: 'code',
+      label: 'کد قطعه',
+      value: (item) => item.code,
+    },
+  ];
+
+  if (includeMother) {
+    selectedColumns.push({
+      key: 'motherCode',
+      label: 'کد مادر (قبل از ساده‌سازی)',
+      value: (item) => item.motherCode ?? item.code,
+    });
+  }
+
+  if (includeProduct) {
+    selectedColumns.push({
+      key: 'productName',
+      label: 'نام کالا',
+      value: (item) => item.partName ?? '—',
+    });
+  }
+
+  if (includeRequests) {
+    selectedColumns.push({
+      key: 'requestCount',
+      label: 'تعداد درخواست',
+      value: (item) => {
+        const count = Number(item.requestCount);
+        if (Number.isFinite(count)) {
+          return count.toLocaleString('fa-IR');
+        }
+        return '0';
+      },
+    });
+  }
+
+  if (includePeak) {
+    selectedColumns.push({
+      key: 'peakPeriod',
+      label: 'بازه زمانی با بیشترین درخواست',
+      value: (item) => getPeakPeriodCellValue(item, peakPeriod),
+    });
+  }
+
+  if (!selectedColumns.length) {
+    selectedColumns.push({
+      key: 'code',
+      label: 'کد قطعه',
+      value: (item) => item.code,
+    });
+  }
+
+  const columnWidth = Math.max(2, selectedColumns.length);
+  const padRow = (cells) => {
+    const row = cells.slice();
+    while (row.length < columnWidth) {
+      row.push('');
+    }
+    return row;
+  };
+
+  const summaryRows = [
+    padRow(['فیلد', 'مقدار']),
+    padRow(['بازه تاریخ (از)', formatReportDate(from)]),
+    padRow(['بازه تاریخ (تا)', formatReportDate(to)]),
+    padRow([
+      'فیلتر تعداد درخواست',
+      normalizedRequestCount !== null
+        ? `بیش از ${normalizedRequestCount.toLocaleString('fa-IR')} درخواست`
+        : 'بدون فیلتر',
+    ]),
+    padRow(['نوع بازه بیشترین درخواست', resolvePeakPeriodLabel(peakPeriod)]),
+    padRow([
+      'ستون‌های خروجی انتخاب‌شده',
+      selectedColumns.map((column) => column.label).join('، ') || '—',
+    ]),
+    padRow([
+      'توضیح کد مادر',
+      'کد مادر همان مقدار استخراج‌شده از پایگاه‌داده پیش از ساده‌سازی است.',
+    ]),
+  ];
+
+  const statsSnapshot = buildMockCodeStats({
+    rangeKey: resolveMockRangeKey(peakPeriod),
+    sortOrder: 'desc',
+    page: 1,
+    pageSize: codeStatsBase.length,
+  });
+
+  let exportItems = statsSnapshot.items;
+  if (normalizedRequestCount !== null) {
+    exportItems = exportItems.filter((item) => item.requestCount > normalizedRequestCount);
+  }
+
+  const tableHeader = padRow(selectedColumns.map((column) => column.label));
+  const tableRows = exportItems.map((item) =>
+    padRow(selectedColumns.map((column) => column.value(item)))
+  );
+
+  const rows = [
+    ...summaryRows,
+    padRow(Array.from({ length: columnWidth }, () => '')),
+    tableHeader,
+    ...tableRows,
+    padRow(Array.from({ length: columnWidth }, () => '')),
+    padRow(['تاریخ تهیه گزارش', formatReportDateTime(now)]),
+  ];
+
+  const blob = await createExcelBlob(rows);
+
+  return {
+    fileName: safeFileName,
+    blob,
+    generatedAt: now.toISOString(),
   };
 }
 
@@ -299,7 +904,13 @@ function getConfig() {
 
 function isMockMode() {
   const { API_BASE_URL } = getConfig();
-  return API_BASE_URL === null || typeof API_BASE_URL === 'undefined';
+  if (API_BASE_URL === null || typeof API_BASE_URL === 'undefined') {
+    return true;
+  }
+  if (typeof API_BASE_URL === 'string' && API_BASE_URL.trim() === '') {
+    return true;
+  }
+  return false;
 }
 
 function withAuthHeaders(headers = {}) {
@@ -364,11 +975,18 @@ function emitFallback(detail) {
 
 async function runMock(handler) {
   await delay();
-  const result = handler();
+  const result = await handler();
+  if (result instanceof Blob) {
+    return result;
+  }
+  if (result && typeof result === 'object' && 'blob' in result && result.blob instanceof Blob) {
+    const { blob, ...rest } = result;
+    return { ...clone(rest), blob };
+  }
   return clone(result);
 }
 
-async function runWithFallback(method, requestFn, mockFn) {
+async function runWithFallback(method, requestFn, mockFn, options = {}) {
   if (isMockMode()) {
     return runMock(mockFn);
   }
@@ -377,7 +995,9 @@ async function runWithFallback(method, requestFn, mockFn) {
     return await requestFn();
   } catch (error) {
     console.warn(`API request failed for ${method}. Falling back to mock data.`, error);
-    emitFallback({ method, error });
+    if (!options?.suppressFallback) {
+      emitFallback({ method, error });
+    }
     return runMock(mockFn);
   }
 }
@@ -446,6 +1066,12 @@ export const api = {
           code: item.code,
           partName: item.partName,
           requestCount: item.requestCount,
+          motherCode: item.motherCode,
+          peak: item.peak,
+          peakDayISO: item.peakDayISO,
+          peakMonthISO: item.peakMonthISO,
+          peakMonthName: item.peakMonthName,
+          peakYear: item.peakYear,
         })),
         page: snapshot.page,
         pageSize: snapshot.pageSize,
@@ -462,6 +1088,120 @@ export const api = {
       () => request(`/api/v1/code-stats?${params.toString()}`),
       mockHandler
     );
+  },
+
+  async exportCodeStatsToExcel(filters = {}) {
+    const payload = {
+      from: filters.dateFrom ?? null,
+      to: filters.dateTo ?? null,
+      requestCount:
+        typeof filters.requestCount === 'number' && !Number.isNaN(filters.requestCount)
+          ? filters.requestCount
+          : filters.requestCount && !Number.isNaN(Number(filters.requestCount))
+          ? Number(filters.requestCount)
+          : null,
+      peakPeriod: filters.peakPeriod ?? 'day',
+      includeMotherCode: normalizeIncludeFlag(filters.includeMotherCode, true),
+      includeProductName: normalizeIncludeFlag(filters.includeProductName, true),
+      includeRequestCount: normalizeIncludeFlag(filters.includeRequestCount, true),
+      includePeakPeriod: normalizeIncludeFlag(filters.includePeakPeriod, true),
+      fileName: filters.fileName ?? null,
+    };
+
+    const runMockExport = () => runMock(() => buildExcelExportMock(payload));
+
+    if (isMockMode()) {
+      emitFallback({ method: 'exportCodeStatsToExcel', reason: 'mock-mode' });
+      const mockResult = await runMockExport();
+      return {
+        ...mockResult,
+        fallback: true,
+        fallbackReason: 'mock-mode',
+      };
+    }
+
+    const handleExportFallback = async (error) => {
+      console.warn('Falling back to mock Excel export due to failure.', error);
+      emitFallback({ method: 'exportCodeStatsToExcel', error });
+      const fallbackResult = await runMockExport();
+      return {
+        ...fallbackResult,
+        fallback: true,
+        fallbackReason: error?.message || null,
+      };
+    };
+
+    let base = '';
+    const { API_BASE_URL } = getConfig();
+    if (typeof API_BASE_URL === 'string') {
+      base = API_BASE_URL.trim();
+    }
+    const normalizedBase = base.endsWith('/') ? base.slice(0, -1) : base;
+    const url = normalizedBase ? `${normalizedBase}/api/v1/code-stats/export` : '/api/v1/code-stats/export';
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload),
+      });
+
+      const contentType = response.headers.get('content-type') || '';
+      const contentDisposition = response.headers.get('content-disposition');
+      const responseFileName = extractFileNameFromDisposition(contentDisposition);
+
+      if (!response.ok) {
+        let errorMessage = 'دریافت خروجی ناموفق بود.';
+        const errorClone = response.clone();
+        try {
+          if (contentType.includes('application/json')) {
+            const data = await errorClone.json();
+            errorMessage = data?.message || errorMessage;
+          } else {
+            const text = await errorClone.text();
+            if (text && text.trim()) {
+              errorMessage = text.trim();
+            }
+          }
+        } catch (parseError) {
+          console.warn('Failed to parse export error payload', parseError);
+        }
+        const exportError = new Error(errorMessage);
+        exportError.status = response.status;
+        exportError.statusText = response.statusText;
+        throw exportError;
+      }
+
+      if (contentType.includes('application/json')) {
+        const data = await response.json();
+        if (data?.content && typeof data.content === 'string') {
+          const binary = atob(data.content);
+          const length = binary.length;
+          const buffer = new Uint8Array(length);
+          for (let i = 0; i < length; i += 1) {
+            buffer[i] = binary.charCodeAt(i);
+          }
+          const blob = new Blob([buffer], { type: EXCEL_MIME_TYPE });
+          return {
+            fileName: ensureXlsxFileName(data.fileName ?? responseFileName ?? payload.fileName),
+            blob,
+          };
+        }
+        if (data?.blob instanceof Blob && data?.fileName) {
+          return {
+            fileName: ensureXlsxFileName(data.fileName ?? responseFileName ?? payload.fileName),
+            blob: data.blob,
+          };
+        }
+        throw new Error('ساختار خروجی ناشناخته است.');
+      }
+
+      const blob = await response.blob();
+      const fileName = ensureXlsxFileName(responseFileName ?? payload.fileName);
+      return { fileName, blob };
+    } catch (error) {
+      return handleExportFallback(error);
+    }
   },
 
   async refreshCodeNames({ limit } = {}) {
