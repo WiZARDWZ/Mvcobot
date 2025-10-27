@@ -54,6 +54,28 @@ function resolvePartName(name) {
   return text;
 }
 
+function extractExportErrorMessage(errorLike) {
+  if (!errorLike) {
+    return '';
+  }
+
+  const value = errorLike instanceof Error ? errorLike.message : String(errorLike ?? '').trim();
+  const trimmed = (value || '').trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  if (/Failed to fetch/i.test(trimmed) || /NetworkError/.test(trimmed)) {
+    return 'ارتباط با سرور برقرار نشد.';
+  }
+
+  if (/timeout/i.test(trimmed)) {
+    return 'مهلت برقراری ارتباط با سرور به پایان رسید.';
+  }
+
+  return trimmed;
+}
+
 export async function mount(container) {
   const heading = createElement('div', { classes: ['section-heading'] });
   heading.append(
@@ -590,11 +612,31 @@ export async function mount(container) {
         }
         const fileName = result.fileName || payload.fileName;
         triggerDownload(result.blob, fileName);
-        renderToast({ message: 'خروجی اکسل با موفقیت آماده شد.' });
+
+        if (result.fallback && result.fallbackReason) {
+          console.warn('Excel export served from fallback data.', result.fallbackReason);
+        }
+
+        let toastType = 'success';
+        let toastMessage = 'خروجی اکسل با موفقیت آماده شد.';
+
+        if (result.fallback) {
+          toastType = 'warning';
+          const fallbackReason = extractExportErrorMessage(result.fallbackReason);
+          toastMessage = fallbackReason
+            ? `اتصال به پایگاه‌داده برقرار نشد؛ خروجی نمونه آماده شد. علت: ${fallbackReason}`
+            : 'اتصال به پایگاه‌داده برقرار نشد؛ خروجی نمونه آماده شد.';
+        }
+
+        renderToast({ message: toastMessage, type: toastType });
         closeModal();
       } catch (error) {
         console.error('Failed to export code statistics', error);
-        renderToast({ message: 'دریافت خروجی ناموفق بود.', type: 'error' });
+        const errorMessage = extractExportErrorMessage(error);
+        const message = errorMessage
+          ? `دریافت خروجی ناموفق بود؛ علت: ${errorMessage}`
+          : 'دریافت خروجی ناموفق بود. لطفاً دوباره تلاش کنید.';
+        renderToast({ message, type: 'error' });
         setSubmitting(false);
       }
     };

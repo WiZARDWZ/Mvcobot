@@ -904,7 +904,13 @@ function getConfig() {
 
 function isMockMode() {
   const { API_BASE_URL } = getConfig();
-  return API_BASE_URL === null || typeof API_BASE_URL === 'undefined';
+  if (API_BASE_URL === null || typeof API_BASE_URL === 'undefined') {
+    return true;
+  }
+  if (typeof API_BASE_URL === 'string' && API_BASE_URL.trim() === '') {
+    return true;
+  }
+  return false;
 }
 
 function withAuthHeaders(headers = {}) {
@@ -1102,11 +1108,28 @@ export const api = {
       fileName: filters.fileName ?? null,
     };
 
-    const mockHandler = () => buildExcelExportMock(payload);
+    const runMockExport = () => runMock(() => buildExcelExportMock(payload));
 
     if (isMockMode()) {
-      return mockHandler();
+      emitFallback({ method: 'exportCodeStatsToExcel', reason: 'mock-mode' });
+      const mockResult = await runMockExport();
+      return {
+        ...mockResult,
+        fallback: true,
+        fallbackReason: 'mock-mode',
+      };
     }
+
+    const handleExportFallback = async (error) => {
+      console.warn('Falling back to mock Excel export due to failure.', error);
+      emitFallback({ method: 'exportCodeStatsToExcel', error });
+      const fallbackResult = await runMockExport();
+      return {
+        ...fallbackResult,
+        fallback: true,
+        fallbackReason: error?.message || null,
+      };
+    };
 
     let base = '';
     const { API_BASE_URL } = getConfig();
@@ -1143,7 +1166,10 @@ export const api = {
         } catch (parseError) {
           console.warn('Failed to parse export error payload', parseError);
         }
-        throw new Error(errorMessage);
+        const exportError = new Error(errorMessage);
+        exportError.status = response.status;
+        exportError.statusText = response.statusText;
+        throw exportError;
       }
 
       if (contentType.includes('application/json')) {
@@ -1174,8 +1200,7 @@ export const api = {
       const fileName = ensureXlsxFileName(responseFileName ?? payload.fileName);
       return { fileName, blob };
     } catch (error) {
-      emitFallback({ method: 'exportCodeStatsToExcel', error });
-      throw error;
+      return handleExportFallback(error);
     }
   },
 
