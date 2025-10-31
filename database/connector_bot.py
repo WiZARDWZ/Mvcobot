@@ -622,31 +622,19 @@ def _resolve_code_range(range_key: str) -> Optional[datetime]:
     return start.replace(tzinfo=None)
 
 
-def fetch_code_statistics(
-    *,
-    range_key: str,
-    sort_order: str,
-    page: int,
-    page_size: int,
-    search: Optional[str] = None,
-) -> Tuple[List[Dict[str, Any]], int]:
-    if not ensure_control_panel_tables():
-        raise RuntimeError("control panel tables are unavailable")
-
+def _build_code_statistics_filters(
+    *, range_key: str, search: Optional[str]
+) -> Tuple[str, List[Any], List[Tuple[str, str]], Dict[str, str]]:
     try:
         inventory_map = get_inventory_name_map()
     except Exception:
         LOGGER.debug("Unable to load inventory name cache", exc_info=True)
         inventory_map = {}
 
-    page = max(1, int(page or 1))
-    page_size = max(1, min(int(page_size or 20), 100))
-    offset = (page - 1) * page_size
-    order = "ASC" if (sort_order or "").lower().startswith("a") else "DESC"
-    start = _resolve_code_range(range_key)
-
     params: List[Any] = []
     filters: List[str] = []
+
+    start = _resolve_code_range(range_key)
     if start is not None:
         filters.append("requested_at >= ?")
         params.append(start)
@@ -657,7 +645,6 @@ def fetch_code_statistics(
         for norm_code, part_name in inventory_map.items():
             if all(_token_matches_text(raw_token, part_name) for raw_token, _ in search_tokens):
                 name_code_matches.append(norm_code)
-        # keep the IN clause reasonably small
         if len(name_code_matches) > 500:
             name_code_matches = name_code_matches[:500]
 
@@ -693,9 +680,29 @@ def fetch_code_statistics(
             filters.append("(" + " OR ".join(clause_options) + ")")
             params.extend(name_code_matches)
 
-    where_clause = ""
-    if filters:
-        where_clause = "WHERE " + " AND ".join(filters)
+    where_clause = "WHERE " + " AND ".join(filters) if filters else ""
+    return where_clause, params, search_tokens, inventory_map
+
+
+def fetch_code_statistics(
+    *,
+    range_key: str,
+    sort_order: str,
+    page: int,
+    page_size: int,
+    search: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], int]:
+    if not ensure_control_panel_tables():
+        raise RuntimeError("control panel tables are unavailable")
+
+    page = max(1, int(page or 1))
+    page_size = max(1, min(int(page_size or 20), 100))
+    offset = (page - 1) * page_size
+    order = "ASC" if (sort_order or "").lower().startswith("a") else "DESC"
+
+    where_clause, params, _, inventory_map = _build_code_statistics_filters(
+        range_key=range_key, search=search
+    )
 
     base_query = f"""
         WITH filtered AS (
@@ -818,6 +825,142 @@ def fetch_code_statistics(
         return items, total
 
     return items, len(records)
+
+
+def fetch_code_statistics_insights(
+    *, range_key: str, search: Optional[str] = None
+) -> Dict[str, Any]:
+    if not ensure_control_panel_tables():
+        raise RuntimeError("control panel tables are unavailable")
+
+    where_clause, params, search_tokens, inventory_map = _build_code_statistics_filters(
+        range_key=range_key, search=search
+    )
+
+    base_cte = f"""
+        WITH filtered AS (
+            SELECT code_norm, code_display, part_name, requested_at, platform
+            FROM platform_code_log
+            {where_clause}
+        ),
+        aggregated AS (
+            SELECT
+                code_norm,
+                code_display,
+                COUNT(*) AS request_count,
+                MIN(requested_at) AS first_requested_at,
+                MAX(requested_at) AS last_requested_at
+            FROM filtered
+            GROUP BY code_norm, code_display
+        ),
+        daily AS (
+            SELECT
+                CONVERT(DATE, requested_at) AS day,
+                COUNT(*) AS request_count
+            FROM filtered
+            GROUP BY CONVERT(DATE, requested_at)
+        ),
+        platform_counts AS (
+            SELECT
+                COALESCE(NULLIF(platform, ''), 'unknown') AS platform,
+                COUNT(*) AS request_count
+            FROM filtered
+            GROUP BY COALESCE(NULLIF(platform, ''), 'unknown')
+        )
+    """
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        summary_query = base_cte + "\n    SELECT\n        COALESCE(SUM(request_count), 0) AS total_requests,\n        COUNT(*) AS unique_codes,\n        MIN(first_requested_at) AS first_requested_at,\n        MAX(last_requested_at) AS last_requested_at\n    FROM aggregated"
+        summary_row = cur.execute(summary_query, *params).fetchone()
+
+        top_query = base_cte + "\n    SELECT TOP (5)\n        agg.code_display,\n        agg.code_norm,\n        agg.request_count,\n        COALESCE(NULLIF(latest.part_name, ''), '-') AS part_name\n    FROM aggregated AS agg\n    OUTER APPLY (\n        SELECT TOP 1 part_name\n        FROM filtered AS f\n        WHERE f.code_norm = agg.code_norm\n          AND f.code_display = agg.code_display\n        ORDER BY\n            CASE\n                WHEN f.part_name IS NOT NULL\n                     AND LTRIM(RTRIM(f.part_name)) <> ''\n                     AND f.part_name <> '-' THEN 0\n                ELSE 1\n            END,\n            f.requested_at DESC\n    ) AS latest\n    ORDER BY agg.request_count DESC, agg.code_display ASC"
+        top_rows = cur.execute(top_query, *params).fetchall()
+
+        daily_query = base_cte + "\n    SELECT day, request_count FROM daily ORDER BY day ASC"
+        daily_rows = cur.execute(daily_query, *params).fetchall()
+
+        platform_query = base_cte + "\n    SELECT platform, request_count FROM platform_counts ORDER BY request_count DESC"
+        platform_rows = cur.execute(platform_query, *params).fetchall()
+
+    total_requests = int(summary_row[0]) if summary_row and summary_row[0] is not None else 0
+    unique_codes = int(summary_row[1]) if summary_row and summary_row[1] is not None else 0
+    first_requested_at = summary_row[2] if summary_row else None
+    last_requested_at = summary_row[3] if summary_row else None
+
+    if hasattr(first_requested_at, "isoformat"):
+        first_iso = first_requested_at.isoformat()
+    elif first_requested_at is not None:
+        first_iso = str(first_requested_at)
+    else:
+        first_iso = None
+
+    if hasattr(last_requested_at, "isoformat"):
+        last_iso = last_requested_at.isoformat()
+    elif last_requested_at is not None:
+        last_iso = str(last_requested_at)
+    else:
+        last_iso = None
+
+    top_codes: List[Dict[str, Any]] = []
+    for row in top_rows:
+        code_display_value = (row[0] or "").strip()
+        code_norm_value = (row[1] or "").strip().upper()
+        request_count_value = int(row[2] or 0)
+        part_name_value = (row[3] or "").strip()
+        normalized_code = code_norm_value or normalize_code(code_display_value).upper()
+        mapped_name = inventory_map.get(normalized_code, "") if normalized_code else ""
+        final_name = mapped_name or part_name_value or "-"
+        share = round((request_count_value / total_requests) * 100, 2) if total_requests else 0.0
+        top_codes.append(
+            {
+                "code": code_display_value,
+                "partName": final_name,
+                "requestCount": request_count_value,
+                "sharePercent": share,
+            }
+        )
+
+    daily_trend: List[Dict[str, Any]] = []
+    for row in daily_rows:
+        day_value = row[0]
+        count_value = int(row[1] or 0)
+        if hasattr(day_value, "isoformat"):
+            day_label = day_value.isoformat()
+        else:
+            day_label = str(day_value)
+        daily_trend.append({"date": day_label, "requestCount": count_value})
+
+    MAX_TREND_POINTS = 90
+    if len(daily_trend) > MAX_TREND_POINTS:
+        daily_trend = daily_trend[-MAX_TREND_POINTS:]
+
+    platform_breakdown: List[Dict[str, Any]] = []
+    for row in platform_rows:
+        platform_value = (row[0] or "unknown").strip() or "unknown"
+        count_value = int(row[1] or 0)
+        share = round((count_value / total_requests) * 100, 2) if total_requests else 0.0
+        platform_breakdown.append(
+            {
+                "platform": platform_value,
+                "requestCount": count_value,
+                "sharePercent": share,
+            }
+        )
+
+    average_per_day = round(total_requests / len(daily_rows), 2) if daily_rows else float(total_requests)
+
+    return {
+        "totalRequests": total_requests,
+        "uniqueCodes": unique_codes,
+        "firstRequestISO": first_iso,
+        "lastRequestISO": last_iso,
+        "activeDays": len(daily_rows),
+        "averagePerDay": average_per_day,
+        "topCodes": top_codes,
+        "dailyTrend": daily_trend,
+        "platformBreakdown": platform_breakdown,
+    }
 
 
 def fetch_code_statistics_for_export(

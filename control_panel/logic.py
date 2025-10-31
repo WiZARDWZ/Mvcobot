@@ -15,6 +15,7 @@ from database.connector_bot import (
     add_to_blacklist,
     fetch_audit_log_entries,
     fetch_code_statistics,
+    fetch_code_statistics_insights,
     fetch_code_statistics_for_export,
     fetch_working_hours_entries,
     get_blacklist,
@@ -832,6 +833,76 @@ def get_metrics() -> Dict[str, Any]:
     }
 
 
+def _build_code_statistics_insights(range_key: str, search_value: str) -> Optional[Dict[str, Any]]:
+    search_arg = (search_value or "").strip() or None
+    try:
+        raw = fetch_code_statistics_insights(range_key=range_key, search=search_arg)
+    except Exception as exc:
+        LOGGER.debug("Failed to compute code statistics insights: %s", exc, exc_info=True)
+        return None
+
+    total_requests = int(raw.get("totalRequests", 0) or 0)
+    unique_codes = int(raw.get("uniqueCodes", 0) or 0)
+    average_per_day = raw.get("averagePerDay")
+    try:
+        average_per_day_value = round(float(average_per_day), 2)
+    except Exception:
+        average_per_day_value = float(total_requests)
+
+    top_codes: List[Dict[str, Any]] = []
+    for item in raw.get("topCodes") or []:
+        try:
+            share_value = round(float(item.get("sharePercent", 0) or 0), 2)
+        except Exception:
+            share_value = 0.0
+        top_codes.append(
+            {
+                "code": str(item.get("code") or "").strip(),
+                "partName": str(item.get("partName") or "-").strip() or "-",
+                "requestCount": int(item.get("requestCount", 0) or 0),
+                "sharePercent": share_value,
+            }
+        )
+
+    daily_trend: List[Dict[str, Any]] = []
+    for item in raw.get("dailyTrend") or []:
+        date_value = str(item.get("date") or "").strip()
+        if not date_value:
+            continue
+        daily_trend.append(
+            {
+                "date": date_value,
+                "requestCount": int(item.get("requestCount", 0) or 0),
+            }
+        )
+
+    platform_breakdown: List[Dict[str, Any]] = []
+    for item in raw.get("platformBreakdown") or []:
+        try:
+            share_value = round(float(item.get("sharePercent", 0) or 0), 2)
+        except Exception:
+            share_value = 0.0
+        platform_breakdown.append(
+            {
+                "platform": str(item.get("platform") or "unknown").strip() or "unknown",
+                "requestCount": int(item.get("requestCount", 0) or 0),
+                "sharePercent": share_value,
+            }
+        )
+
+    return {
+        "totalRequests": total_requests,
+        "uniqueCodes": unique_codes,
+        "firstRequestISO": raw.get("firstRequestISO"),
+        "lastRequestISO": raw.get("lastRequestISO"),
+        "activeDays": int(raw.get("activeDays", len(daily_trend)) or len(daily_trend)),
+        "averagePerDay": average_per_day_value,
+        "topCodes": top_codes,
+        "dailyTrend": daily_trend,
+        "platformBreakdown": platform_breakdown,
+    }
+
+
 def get_code_statistics(
     *,
     range_key: str,
@@ -880,6 +951,137 @@ def get_code_statistics(
         "range": range_key,
         "sort": sort_order,
         "search": search_value,
+        "insights": _build_code_statistics_insights(range_key, search_value),
+    }
+
+
+def export_code_statistics_to_excel(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ControlPanelError("ساختار درخواست نامعتبر است.")
+
+    date_from = _parse_date_field(payload.get("dateFrom"), "شروع بازه")
+    date_to = _parse_date_field(payload.get("dateTo"), "پایان بازه", end_of_day=True)
+    if date_from and date_to and date_from > date_to:
+        raise ControlPanelError("تاریخ شروع نمی‌تواند بعد از تاریخ پایان باشد.")
+
+    raw_min_requests = payload.get("requestCount")
+    min_requests: Optional[int]
+    if raw_min_requests in (None, ""):
+        min_requests = None
+    else:
+        try:
+            min_requests = int(raw_min_requests)
+        except Exception:
+            raise ControlPanelError("حداقل تعداد درخواست باید عددی باشد.")
+        if min_requests < 0:
+            raise ControlPanelError("حداقل تعداد درخواست نمی‌تواند منفی باشد.")
+
+    peak_period = str(payload.get("peakPeriod") or "day").strip().lower() or "day"
+    if peak_period not in {"day", "month", "year"}:
+        raise ControlPanelError("مقدار بازه پیک معتبر نیست. روز، ماه یا سال را انتخاب کنید.")
+
+    include_mother = bool(payload.get("includeMotherCode"))
+    include_product = bool(payload.get("includeProductName"))
+    include_requests = bool(payload.get("includeRequestCount"))
+    include_peak = bool(payload.get("includePeakPeriod"))
+
+    file_name = _sanitize_excel_filename(payload.get("fileName"))
+
+    try:
+        records = fetch_code_statistics_for_export(
+            date_from=date_from,
+            date_to=date_to,
+            min_request_count=min_requests,
+            include_peak_period=include_peak,
+            peak_period=peak_period,
+        )
+    except ControlPanelError:
+        raise
+    except Exception as exc:
+        LOGGER.exception("Failed to prepare code statistics for export: %s", exc)
+        raise ControlPanelError("آماده‌سازی داده‌ها برای خروجی امکان‌پذیر نبود.", status=500)
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "آمار کدها"
+
+    peak_labels = {"day": "روز", "month": "ماه", "year": "سال"}
+
+    headers = ["کد قطعه"]
+    if include_mother:
+        headers.append("کد مادر")
+    if include_product:
+        headers.append("نام کالا")
+    if include_requests:
+        headers.append("تعداد درخواست")
+    if include_peak:
+        headers.append(f"بازه پیک ({peak_labels.get(peak_period, 'روز')})")
+
+    sheet.append(headers)
+
+    rows_written = 0
+    for item in records:
+        normalized_code = str(item.get("code_norm") or "").strip()
+        if not normalized_code:
+            normalized_code = str(item.get("code_display") or "").replace("-", "").strip()
+
+        row_values: List[Any] = [normalized_code]
+        if include_mother:
+            row_values.append(str(item.get("code_display") or ""))
+        if include_product:
+            row_values.append(str(item.get("part_name") or "-"))
+        if include_requests:
+            row_values.append(int(item.get("request_count") or 0))
+        if include_peak:
+            peak_value = str(item.get("peak_period") or "").strip()
+            peak_count = int(item.get("peak_count") or 0)
+            if peak_value and peak_count > 0:
+                peak_text = f"{peak_value} ({peak_count} درخواست)"
+            elif peak_value:
+                peak_text = peak_value
+            else:
+                peak_text = "-"
+            row_values.append(peak_text)
+
+        sheet.append(row_values)
+        rows_written += 1
+
+    for index, header in enumerate(headers, start=1):
+        column_letter = get_column_letter(index)
+        max_length = len(str(header))
+        for row in sheet.iter_rows(min_row=2, min_col=index, max_col=index):
+            cell_value = row[0].value
+            if cell_value is None:
+                continue
+            max_length = max(max_length, len(str(cell_value)))
+        sheet.column_dimensions[column_letter].width = min(max_length + 2, 60)
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    content = buffer.getvalue()
+    encoded = base64.b64encode(content).decode("ascii")
+
+    details = {
+        "rows": rows_written,
+        "minRequests": min_requests,
+        "includePeak": include_peak,
+        "peakPeriod": peak_period,
+    }
+    if date_from:
+        details["dateFrom"] = date_from.isoformat()
+    if date_to:
+        details["dateTo"] = date_to.isoformat()
+
+    try:
+        _append_audit_event("دریافت خروجی آمار کدها", details=details)
+    except Exception:
+        LOGGER.debug("Failed to record export audit event", exc_info=True)
+
+    return {
+        "fileName": file_name,
+        "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "content": encoded,
+        "size": len(content),
     }
 
 
