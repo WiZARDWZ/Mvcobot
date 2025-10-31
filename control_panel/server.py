@@ -121,6 +121,10 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
                     logic.refresh_code_stat_names(limit=limit_value),
                 )
             )
+        elif path == "/api/v1/code-stats/export":
+            self._handle_api(
+                lambda: (HTTPStatus.OK, logic.export_code_statistics_to_excel(body))
+            )
         else:
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint not found")
 
